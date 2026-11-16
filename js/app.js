@@ -25,7 +25,7 @@
   window.App = App;
 
   var $ = function (id) { return document.getElementById(id); };
-  var BUILD = '1.0.0';
+  var BUILD = '1.0.1';
   window.__BUILD = BUILD;
   function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
@@ -558,15 +558,18 @@
     dragState = st;
 
     if (e.pointerType === 'touch') {
-      st.timer = setTimeout(function () { beginDrag(st); }, 240);
+      // 按住更久才进入拖动，滑动屏幕时不会误触
+      st.timer = setTimeout(function () { beginDrag(st); }, 480);
     }
 
     function onMove(ev) {
       if (ev.pointerId !== st.pointerId) return;
       if (!st.active) {
+        if (st.dead) return;
         if (st.timer) {
-          if (Math.abs(ev.clientX - st.sx) > 10 || Math.abs(ev.clientY - st.sy) > 10) {
+          if (Math.abs(ev.clientX - st.sx) > 8 || Math.abs(ev.clientY - st.sy) > 8) {
             clearTimeout(st.timer); st.timer = null;
+            st.dead = true;            // 手指动了 = 在滑动，这次按压根就不是拖图
           }
           return;
         }
@@ -577,11 +580,21 @@
       showDropIndicator(ev.clientX, ev.clientY, st);
     }
 
+    function onCancel() {
+      document.removeEventListener('pointermove', onMove, true);
+      document.removeEventListener('pointerup', onUp, true);
+      document.removeEventListener('pointercancel', onCancel, true);
+      if (st.timer) clearTimeout(st.timer);
+      hideDropIndicator();
+      endDrag(st);          // 只复原，不落子
+      dragState = null;
+    }
+
     function onUp(ev) {
       if (ev.pointerId !== st.pointerId) return;
       document.removeEventListener('pointermove', onMove, true);
       document.removeEventListener('pointerup', onUp, true);
-      document.removeEventListener('pointercancel', onUp, true);
+      document.removeEventListener('pointercancel', onCancel, true);
       if (st.timer) clearTimeout(st.timer);
       var tgt = DragTarget;          // 先记住落点，收线会把它清掉
       var wasActive = st.active;
@@ -600,7 +613,7 @@
 
     document.addEventListener('pointermove', onMove, true);
     document.addEventListener('pointerup', onUp, true);
-    document.addEventListener('pointercancel', onUp, true);
+    document.addEventListener('pointercancel', onCancel, true);
   }
 
   function beginDrag(st) {
@@ -695,11 +708,30 @@
           return;
         }
       }
-      // 插入位置：按列边界算
-      var idx = cells.length, baseCell = cells[cells.length - 1], after = true;
-      for (var k2 = 0; k2 < cells.length; k2++) {
-        var rk = cells[k2].getBoundingClientRect();
-        if (x < rk.left + rk.width / 2) { idx = k2; baseCell = cells[k2]; after = false; break; }
+      // 插入位置：只在指针所在的那一行里算
+      var rowTop = hitIdx >= 0 ? cells[hitIdx].getBoundingClientRect().top : null;
+      if (rowTop === null) {
+        // 没落在任何格子里：找最接近的一行
+        var bestRow = cells[0].getBoundingClientRect();
+        for (var q2 = 0; q2 < cells.length; q2++) {
+          var rq = cells[q2].getBoundingClientRect();
+          if (y >= rq.top && y <= rq.bottom) { bestRow = rq; break; }
+          if (Math.abs(y - rq.top) < Math.abs(y - bestRow.top)) bestRow = rq;
+        }
+        rowTop = bestRow.top;
+      }
+      var rowCells = [];
+      for (var q3 = 0; q3 < cells.length; q3++) {
+        if (Math.abs(cells[q3].getBoundingClientRect().top - rowTop) < 4) rowCells.push(q3);
+      }
+      if (!rowCells.length) rowCells = [0];
+      var idx = rowCells[rowCells.length - 1] + 1;      // 默认插在这行末尾之后
+      var baseCell = cells[rowCells[rowCells.length - 1]];
+      var after = true;
+      for (var k2 = 0; k2 < rowCells.length; k2++) {
+        var ci2 = rowCells[k2];
+        var rk = cells[ci2].getBoundingClientRect();
+        if (x < rk.left + rk.width / 2) { idx = ci2; baseCell = cells[ci2]; after = false; break; }
       }
       var rb = baseCell.getBoundingClientRect();
       line.className = 'drop-caret';

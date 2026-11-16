@@ -1311,3 +1311,10 @@ body.img-drag-mode{cursor:grabbing;user-select:none;-webkit-user-select:none;}
 }
 .inline-img, .inline-img img{touch-action:none;}
 .drop-caret{display:none;}
+/* ---------- 画布：先点一下再操作 ---------- */
+.cv-arm-hint{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  padding:10px 18px;border-radius:999px;
+  background:rgba(17,24,39,.72);color:#fff;font-size:13px;
+  pointer-events:none;z-index:12;backdrop-filter:blur(4px);
+}

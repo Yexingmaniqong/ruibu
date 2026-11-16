@@ -38,6 +38,8 @@
     this._pointers = new Map();
     this._markerId = 'arw' + (++markerSeq);
     this._destroyed = false;
+    this.armed = false;
+    this._wake = null;
     // 用 AbortController 统一解绑：destroy() 时一次 abort，避免旧实例的事件
     // 残留在复用的 host 上（否则每次打开笔记都会多挂一套手势，点击节点边框会崩）
     this._ac = (typeof AbortController === 'function') ? new AbortController() : null;
@@ -47,9 +49,21 @@
   }
 
   /* ================= 构建 DOM ================= */
+  CanvasBoard.prototype.arm = function () {
+    if (this.armed) return;
+    this.armed = true;
+    if (this._armHint) this._armHint.style.display = 'none';
+    if (this.host) this.host.classList.add('cv-armed');
+  };
+
   CanvasBoard.prototype._build = function () {
     var host = this.host;
     host.innerHTML = '';
+    var armHint = document.createElement('div');
+    armHint.className = 'cv-arm-hint';
+    armHint.textContent = '点一下画布开始编辑';
+    host.appendChild(armHint);
+    this._armHint = armHint;
 
     var world = document.createElement('div');
     world.className = 'cv-world';
@@ -649,6 +663,11 @@
       if (self._destroyed) return;
       if (self.editingId) return;
       if (e.button !== undefined && e.button !== 0 && e.pointerType === 'mouse') return;
+      // 未唤醒：只接受"点一下"来激活，避免滑动屏幕时误拖节点
+      if (!self.armed) {
+        self._wake = { x: e.clientX, y: e.clientY, id: e.pointerId };
+        return;
+      }
       try { host.setPointerCapture(e.pointerId); } catch (err) { }
 
       self._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -818,6 +837,12 @@
 
     function endPointer(e) {
       if (self._destroyed) return;
+      var wk = self._wake;
+      if (wk && wk.id === e.pointerId) {
+        self._wake = null;
+        if (Math.abs(e.clientX - wk.x) < 14 && Math.abs(e.clientY - wk.y) < 14) self.arm();
+        return;
+      }
       self._pointers.delete(e.pointerId);
       var g = self._gesture;
 
