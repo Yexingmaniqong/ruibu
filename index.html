@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="RUIBU">
+<meta name="application-name" content="RUIBU">
+<meta name="description" content="RUIBU · 笔记 / 日记 / 思维导图，图文自由穿插，离线可用">
+<title>RUIBU · 笔记与日记</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="vendor/katex/katex.min.css">
+</head>
+<body>
+
+<!-- 图标符号库 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.3"/><path d="m15.3 15.3 4.4 4.4"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7.4" height="7.4" rx="1.8"/><rect x="13.6" y="3" width="7.4" height="7.4" rx="1.8"/><rect x="3" y="13.6" width="7.4" height="7.4" rx="1.8"/><rect x="13.6" y="13.6" width="7.4" height="7.4" rx="1.8"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5.5" cy="12" r="1.5" style="fill:currentColor;stroke:none"/><circle cx="12" cy="12" r="1.5" style="fill:currentColor;stroke:none"/><circle cx="18.5" cy="12" r="1.5" style="fill:currentColor;stroke:none"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M9.5 4.5H4.5v5M14.5 4.5h5v5M9.5 19.5H4.5v-5M14.5 19.5h5v-5"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M5 4.5h9.5L19 9v10.5H5z"/><path d="M14.5 4.5V9H19"/><path d="M8.5 12.5h7M8.5 16h4.5"/></symbol>
+    <symbol id="i-graph" viewBox="0 0 24 24"><circle cx="6" cy="7" r="2.2"/><circle cx="18" cy="7" r="2.2"/><circle cx="12" cy="18" r="2.2"/><path d="M8.2 7h7.6M7.1 8.9l4 7.3M16.9 8.9l-4 7.3"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h9M17.6 7H20M4 12h2.4M11 12h9M4 17h9M17.6 17H20"/><circle cx="15" cy="7" r="2"/><circle cx="8.8" cy="12" r="2"/><circle cx="15" cy="17" r="2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5.5v13M5.5 12h13"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 4.5 7.5 12l7.5 7.5"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-hash" viewBox="0 0 24 24"><path d="M9 4 7.5 20M16.5 4 15 20M4.5 9h15M4 15h15"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="8.8" cy="9.8" r="1.6"/><path d="m4 17 5-4.6 3.4 3 3-2.6 4.6 4.2"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M4.5 12h14M13 6.5l5.5 5.5L13 17.5"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3.5v4M16 3.5v4"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8.5h3l1.4-2.2h7.2L17 8.5h3a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.4" r="3.4"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M8.5 6.5h12M8.5 12h12M8.5 17.5h12"/><circle cx="4.6" cy="6.5" r="1.3" style="fill:currentColor;stroke:none"/><circle cx="4.6" cy="12" r="1.3" style="fill:currentColor;stroke:none"/><circle cx="4.6" cy="17.5" r="1.3" style="fill:currentColor;stroke:none"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3.5l1.9 4.6 4.6 1.9-4.6 1.9L12 16.5l-1.9-4.6L5.5 10l4.6-1.9z"/><path d="M18.5 15.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.8h5V7M6.6 7l.9 12.2h9l.9-12.2"/><path d="M10 10.5v6M14 10.5v6"/></symbol>
+  </defs>
+</svg>
+
+<div id="app">
+
+  <!-- ================= 左侧边栏 ================= -->
+  <aside id="sidebar">
+    <div class="side-head">
+      <div class="brand">RUIBU<span class="brand-dot">·</span><span class="brand-sub">日记</span></div>
+      <button class="icon-btn side-close" id="side-close"><svg class="ico"><use href="#i-close"/></svg></button>
+    </div>
+
+    <div class="side-stats">
+      <div class="stat"><b id="stat-notes">0</b><span>笔记</span></div>
+      <div class="stat"><b id="stat-tags">0</b><span>标签</span></div>
+      <div class="stat"><b id="stat-days">0</b><span>天</span></div>
+    </div>
+
+    <div class="heatmap-wrap">
+      <div class="heatmap" id="heatmap"></div>
+      <div class="heatmap-axis" id="heatmap-axis"></div>
+    </div>
+
+    <nav class="side-nav">
+      <button class="nav-item active" data-nav="notes">
+        <span class="nav-ico all-ico"><svg class="ico"><use href="#i-note"/></svg></span>
+        <span class="nav-label">全部笔记</span>
+        <svg class="ico nav-arrow"><use href="#i-back"/></svg>
+      </button>
+      <button class="nav-item" data-nav="diary">
+        <span class="nav-ico"><svg class="ico"><use href="#i-calendar"/></svg></span>
+        <span class="nav-label">日记</span>
+      </button>
+      <button class="nav-item" data-nav="ai">
+        <span class="nav-ico"><svg class="ico"><use href="#i-spark"/></svg></span>
+        <span class="nav-label">AI 问答</span>
+      </button>      <button class="nav-item" data-nav="boards">
+        <span class="nav-ico"><svg class="ico"><use href="#i-graph"/></svg></span>
+        <span class="nav-label">关系画布</span>
+      </button>
+      <button class="nav-item" data-nav="settings">
+        <span class="nav-ico"><svg class="ico"><use href="#i-settings"/></svg></span>
+        <span class="nav-label">设置</span>
+      </button>
+    </nav>
+
+    <div class="side-tags">
+      <div class="side-tags-head">
+        <span>全部标签</span>
+        <span class="tags-count" id="tags-count"></span>
+      </div>
+      <div id="side-tag-list"></div>
+    </div>
+<div class="side-foot" id="side-foot"></div>
+  </aside>
+  <div id="side-overlay" class="hidden"></div>
+
+  <!-- ================= 主区域 ================= -->
+  <main id="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="btn-menu"><svg class="ico"><use href="#i-menu"/></svg></button>
+      <div class="topbar-title" id="page-title">全部笔记</div>
+      <div class="topbar-nav" id="topbar-nav">
+        <button data-nav-icon="notes" title="全部笔记"><svg class="ico"><use href="#i-note"/></svg></button>
+        <button data-nav-icon="diary" title="日记"><svg class="ico"><use href="#i-calendar"/></svg></button>
+        <button data-nav-icon="ai" title="AI 问答"><svg class="ico"><use href="#i-spark"/></svg></button>
+        <button data-nav-icon="boards" title="关系画布"><svg class="ico"><use href="#i-graph"/></svg></button>
+      </div>
+      <div class="topbar-right">
+        <div class="search-box" id="search-box">
+          <svg class="ico"><use href="#i-search"/></svg>
+          <input type="search" id="search-input" placeholder="搜索笔记" autocomplete="off">
+        </div>
+        <button class="icon-btn only-mobile" id="btn-search-m"><svg class="ico"><use href="#i-search"/></svg></button>
+      </div>
+    </header>
+
+    <!-- 笔记流 -->
+    <section class="pane" id="view-notes">
+      <div class="pane-inner">
+        <div class="composer" id="composer">
+          <div class="composer-input" id="composer-open">
+            <span class="ph">现在的想法是…</span>
+          </div>
+          <div class="composer-bar">
+            <div class="composer-tools">
+              <button class="tool-btn" id="composer-img" title="添加图片"><svg class="ico"><use href="#i-image"/></svg></button>
+              <button class="tool-btn" id="composer-tag" title="插入标签"><svg class="ico"><use href="#i-hash"/></svg></button>
+            </div>
+            <button class="send-btn" id="composer-send"><svg class="ico"><use href="#i-send"/></svg></button>
+          </div>
+        </div>
+        <div class="tag-bar" id="tag-bar"></div>
+        <div class="note-list" id="note-list"></div>
+      </div>
+    </section>
+
+    <!-- AI 问答 -->
+    <section class="pane hidden" id="view-ai">
+      <div class="ai-wrap">
+        <div class="ai-log" id="ai-log"></div>
+        <div class="ai-attach hidden" id="ai-attach"></div>
+        <div class="ai-input">
+          <button class="ai-addimg" id="ai-addimg" title="给 AI 发图片"><svg class="ico"><use href="#i-image"/></svg></button>
+          <textarea id="ai-text" rows="1" placeholder="问点什么…  Ctrl/⌘ + Enter 发送"></textarea>
+          <button class="ai-send" id="ai-send" title="发送"><svg class="ico"><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 日记 -->
+    <section class="pane hidden" id="view-diary">
+      <div class="pane-inner">
+        <div class="pane-head">
+          <div class="pane-desc" id="diary-desc">按日期记录，一天可以写很多条。</div>
+          <button class="ghost-btn" id="btn-new-diary"><svg class="ico"><use href="#i-plus"/></svg>写日记</button>
+        </div>
+        <div class="diary-strip" id="diary-strip"></div>
+        <div class="diary-list" id="diary-list"></div>
+      </div>
+    </section>
+
+    <!-- 画布列表 -->
+    <section class="pane hidden" id="view-boards">
+      <div class="pane-inner">
+        <div class="pane-head">
+          <div class="pane-desc">把不同笔记拖进同一张画布，用箭头连起来，就是一个整体思维导图。</div>
+          <button class="ghost-btn" id="btn-new-board"><svg class="ico"><use href="#i-plus"/></svg>新建画布</button>
+        </div>
+        <div class="board-list" id="board-list"></div>
+      </div>
+    </section>
+
+    <!-- 设置 -->
+    <section class="pane hidden" id="view-settings">
+      <div class="pane-inner narrow">
+        <div class="settings-group">
+          <div class="settings-title">AI（DeepSeek）</div>
+          <p class="settings-note">
+            填你自己的 DeepSeek API Key（<code>sk-…</code>）。Key 只存在这台设备本地，
+            提问时经本机同步服务转发，不会存到别处。
+            没有 Key 可去 platform.deepseek.com 申请。
+          </p>
+          <input class="set-input" id="ai-key" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false">
+          <select class="set-input" id="ai-model">
+            <option value="deepseek-chat">deepseek-chat</option>
+            <option value="deepseek-reasoner">deepseek-reasoner</option>
+          </select>
+          <button class="row-btn" id="btn-ai-save">保存 AI 设置</button>
+          <button class="row-btn" id="btn-ai-test">测试连接</button>
+        </div>
+        <div class="settings-group">
+          <div class="settings-title">数据</div>
+          <button class="row-btn" id="btn-export-json">导出备份（JSON）</button>
+          <button class="row-btn" id="btn-import-json">导入备份（JSON）</button>
+          <button class="row-btn" id="btn-export-canvas">导出为 .canvas（Obsidian 格式）</button>
+          <button class="row-btn" id="btn-import-flomo">导入 flomo 导出文件</button>
+        </div>
+        <div class="settings-group">
+          <div class="settings-title">说明</div>
+          <p class="settings-note">
+            所有数据只保存在本机浏览器（IndexedDB），不上传任何服务器，断网也能用。<br>
+            清理浏览器数据会删掉笔记，请定期导出备份。<br>
+            手机上用浏览器菜单「添加到主屏幕」，就能像 App 一样打开。
+          </p>
+          <p class="settings-note" id="storage-info"></p>
+        </div>
+        <div class="settings-group">
+          <div class="settings-title">版本</div>
+          <p class="settings-note" id="ver-info">—</p>
+          <button class="row-btn" id="btn-hard-reload">清除缓存并重新载入</button>
+        </div>
+        <div class="settings-group">
+          <div class="settings-title">危险操作</div>
+          <button class="row-btn danger" id="btn-clear-all">清空全部数据</button>
+        </div>
+    </section>
+
+    <!-- 手机底部输入条 -->
+    <div class="mobile-composer" id="mobile-composer">
+      <button class="mc-plus" id="mc-plus"><svg class="ico"><use href="#i-plus"/></svg></button>
+      <span class="mc-ph">点击新建笔记</span>
+    </div>
+  </main>
+</div>
+
+<!-- ============ 全屏层：笔记详情 ============ -->
+<section class="sheet hidden" id="sheet-note">
+  <header class="topbar">
+    <button class="icon-btn" id="note-back"><svg class="ico"><use href="#i-back"/></svg></button>
+    <div class="topbar-title" id="note-date"></div>
+    <div class="topbar-right">
+      <button class="icon-btn" id="note-canvas-btn" title="打开这条笔记的画布"><svg class="ico"><use href="#i-grid"/></svg></button>
+      <button class="icon-btn" id="note-menu-btn" title="更多"><svg class="ico"><use href="#i-more"/></svg></button>
+    </div>
+  </header>
+  <div class="sheet-scroll">
+    <div class="note-detail-body">
+      <div class="note-blocks" id="note-blocks"></div>
+
+      <!-- 内嵌画布：创建后直接显示在笔记下方 -->
+      <div class="inline-canvas hidden" id="note-canvas-inline">
+        <div class="ic-head">
+          <span class="ic-title">画布 · 拖动图片摆位，从圆点拖出箭头</span>
+          <div class="ic-tools">
+            <button class="ic-btn" data-ic="text">文字</button>
+            <button class="ic-btn" data-ic="image">图片</button>
+            <button class="ic-btn" data-ic="fit">居中</button>
+            <button class="ic-btn primary" data-ic="full">全屏</button>
+          </div>
+        </div>
+        <div class="ic-host" id="ic-host"></div>
+        <div class="ic-toolbar hidden" id="ic-toolbar">
+          <button data-icact="view" class="only-image">查看</button>
+          <button data-icact="edit">编辑</button>
+          <button data-icact="del" class="danger">删除</button>
+        </div>
+      </div>
+
+      <div class="note-canvas-hint" id="note-canvas-hint">
+        <div class="hint-icon"><svg class="ico"><use href="#i-grid"/></svg></div>
+        <div class="hint-text">这条笔记还没有画布</div>
+        <div class="hint-sub">把图片自由摆开、用箭头指向，做成一页思维导图</div>
+        <button class="primary-btn" id="note-create-canvas">创建画布</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 编辑工具条：井号 / 相册 / 拍照 / 粗体 / 列表 / 更多 -->
+  <div class="editor-bar" id="editor-bar">
+    <button class="ed-btn" data-ed="tag" title="标签"><svg class="ico"><use href="#i-hash"/></svg></button>
+    <button class="ed-btn" data-ed="album" title="从相册选图"><svg class="ico"><use href="#i-image"/></svg></button>
+    <button class="ed-btn" data-ed="camera" title="拍照"><svg class="ico"><use href="#i-camera"/></svg></button>
+    <button class="ed-btn" data-ed="more" title="更多"><svg class="ico"><use href="#i-more"/></svg></button>
+  </div>
+</section>
+
+<!-- ============ 全屏层：画布 ============ -->
+<section class="sheet hidden" id="sheet-canvas">
+  <header class="topbar canvas-topbar">
+    <button class="icon-btn" id="canvas-back"><svg class="ico"><use href="#i-back"/></svg></button>
+    <div class="topbar-title" id="canvas-title">画布</div>
+    <div class="topbar-right">
+      <button class="icon-btn" id="canvas-fit" title="适应屏幕"><svg class="ico"><use href="#i-fit"/></svg></button>
+      <button class="icon-btn" id="canvas-menu" title="更多"><svg class="ico"><use href="#i-more"/></svg></button>
+    </div>
+  </header>
+  <div class="canvas-host" id="canvas-host"></div>
+
+  <div class="node-toolbar hidden" id="node-toolbar">
+    <button data-act="view" class="only-image">查看</button>
+    <button data-act="link">连线</button>
+    <button data-act="edit">编辑</button>
+    <button data-act="dup">复制</button>
+    <button data-act="del" class="danger">删除</button>
+  </div>
+
+  <div class="canvas-dock" id="canvas-dock">
+    <button data-act="add-text">文字</button>
+    <button data-act="add-image">图片</button>
+    <button data-act="add-note" id="dock-add-note">笔记</button>
+    <button data-act="center">居中</button>
+  </div>
+
+  <div class="canvas-toast hidden" id="canvas-toast"></div>
+</section>
+
+<!-- ============ 通用弹层 ============ -->
+<div class="modal-mask hidden" id="modal-mask">
+  <div class="modal" id="modal">
+    <div class="modal-title" id="modal-title"></div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-actions" id="modal-actions"></div>
+  </div>
+</div>
+
+<div class="picker-mask hidden" id="picker-mask">
+  <div class="picker">
+    <div class="picker-head">
+      <div class="picker-title" id="picker-title">选择笔记</div>
+      <button class="icon-btn" id="picker-close"><svg class="ico"><use href="#i-close"/></svg></button>
+    </div>
+    <input type="search" class="picker-search" id="picker-search" placeholder="搜索…">
+    <div class="picker-list" id="picker-list"></div>
+  </div>
+</div>
+
+<input type="file" id="file-image" accept="image/*" multiple hidden>
+<input type="file" id="file-camera" accept="image/*" capture="environment" hidden>
+<input type="file" id="file-json" accept=".json,application/json" hidden>
+<input type="file" id="file-html" accept=".html,.htm,.csv,.txt" hidden>
+
+<!-- 右键 / 长按菜单 -->
+<div class="ctx-mask hidden" id="ctx-mask">
+  <div class="ctx-menu" id="ctx-menu"></div>
+</div>
+
+<script>
+(function(){
+  function show(msg){
+    var d = document.getElementById('boot-error');
+    if (!d) {
+      d = document.createElement('div');
+      d.id = 'boot-error';
+      d.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;background:#fee2e2;color:#991b1b;'+
+        'font-size:12px;line-height:1.5;padding:8px 12px;white-space:pre-wrap;word-break:break-all;font-family:monospace;';
+      document.body.appendChild(d);
+    }
+    d.textContent += msg + '\n';
+  }
+  window.addEventListener('error', function(e){
+    show('ERR: ' + (e.message || e.error) + ' @ ' + (e.filename||'').split('/').pop() + ':' + e.lineno);
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    show('REJ: ' + (e.reason && (e.reason.message || e.reason)));
+  });
+  window.__showBootError = show;
+})();
+</script>
+<script src="vendor/katex/katex.min.js"></script>
+<script src="js/render.js"></script>
+<script src="js/db.js"></script>
+<script src="js/store.js"></script>
+<script src="js/canvas.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/ai.js"></script>
+<script src="js/app.js"></script>
+<script>
+/* 注册 Service Worker：https 或 localhost 下可用，从而支持「安装到桌面」 */
+(function () {
+  if (!('serviceWorker' in navigator)) return;
+  var h = location.hostname;
+  var secure = location.protocol === 'https:' || h === 'localhost' || h === '127.0.0.1';
+  if (!secure) return;
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
+      if (reg && reg.update) reg.update();
+    }).catch(function () {});
+  });
+  // 新版本接管后自动刷新一次，避免看到旧界面
+  var hadCtrl = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', function () {
+    if (!hadCtrl) return;
+    hadCtrl = false;
+    location.reload();
+  });
+})();
+</script>
+</body>
+</html>
