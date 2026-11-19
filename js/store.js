@@ -13,6 +13,7 @@
     version: 1,
     notes: [],
     boards: [],
+    todos: [],
     tomb: {},              // id -> 删除时间，用于多端同步时不复活已删条目
     ui: { lastTab: 'notes' }
   };
@@ -133,6 +134,7 @@
       state = Object.assign(state, loaded);
       state.notes = state.notes || [];
       state.boards = state.boards || [];
+      state.todos = Array.isArray(state.todos) ? state.todos : [];
       state.tomb = state.tomb || {};
     }
     await loadAllImages();
@@ -484,6 +486,21 @@
     (incoming.boards || []).forEach(function (b) { boardMap[b.id] = b; });
     state.boards = Object.keys(boardMap).map(function (k) { return boardMap[k]; });
 
+    var tasks = new Map(state.todos.map(function (task) { return [task.id, task]; }));
+    if (Array.isArray(incoming.todos)) incoming.todos.forEach(function (task) {
+      if (!task || typeof task.id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(task.id)
+          || typeof task.title !== 'string' || !task.title.trim()) return;
+      var existing = tasks.get(task.id);
+      if (existing && existing.updatedAt > task.updatedAt) return;
+      tasks.set(task.id, {
+        id: task.id, title: task.title.trim().slice(0, 160),
+        dueAt: Number.isFinite(task.dueAt) && task.dueAt > 0 ? task.dueAt : null,
+        doneAt: Number.isFinite(task.doneAt) && task.doneAt > 0 ? task.doneAt : null,
+        remindedAt: task.remindedAt === task.dueAt ? task.remindedAt : null,
+        updatedAt: Number.isFinite(task.updatedAt) ? task.updatedAt : now()
+      });
+    });
+    state.todos = Array.from(tasks.values());
     state.notes.sort(function (a, b) { return b.createdAt - a.createdAt; });
     await saveNow();
   }
@@ -598,7 +615,7 @@
     await DB.clear('kv');
     await DB.clear('images');
     imgCache = Object.create(null);
-    state = { version: 1, notes: [], boards: [], tomb: tomb, ui: { lastTab: 'notes' } };
+    state = { version: 1, notes: [], boards: [], todos: [], tomb: tomb, ui: { lastTab: 'notes' } };
     await saveNow();
     scheduleSave();   // 通知同步模块把删除推给服务端
   }

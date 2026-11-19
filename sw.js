@@ -1,5 +1,5 @@
 /* Service Worker：离线缓存，装到桌面后断网也能打开 */
-var CACHE = 'ruibu-v1.0.3';
+var CACHE = 'ruibu-v1.0.4';
 var ASSETS = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ var ASSETS = [
   './js/ui.js',
   './js/render.js',
   './js/ai.js',
+  './js/todos.js',
   './js/app.js',
   './manifest.json',
   './icon.svg',

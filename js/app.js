@@ -25,7 +25,7 @@
   window.App = App;
 
   var $ = function (id) { return document.getElementById(id); };
-  var BUILD = '1.0.3';
+  var BUILD = '1.0.4';
   window.__BUILD = BUILD;
   function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
@@ -44,7 +44,7 @@
   /* ================= 导航 ================= */
   function switchTab(tab) {
     App.tab = tab;
-    ['notes', 'diary', 'ai', 'boards', 'settings'].forEach(function (t) {
+    ['notes', 'diary', 'todos', 'ai', 'boards', 'settings'].forEach(function (t) {
       $('view-' + t).classList.toggle('hidden', t !== tab);
     });
     Array.prototype.forEach.call(document.querySelectorAll('.nav-item'), function (b) {
@@ -59,6 +59,7 @@
     $('mobile-composer').classList.toggle('hidden', tab !== 'notes');
     if (tab === 'boards') renderBoards();
     if (tab === 'diary') renderDiary();
+    if (tab === 'todos') Todos.render();
     if (tab === 'ai') { renderAI(); updateAISend(); }
     if (window.__aiFillSettings && (tab === 'settings')) window.__aiFillSettings();
     closeSidebar();
@@ -67,6 +68,7 @@
   function updateTitle() {
     var t = '全部笔记';
     if (App.tab === 'diary') t = '日记';
+    else if (App.tab === 'todos') t = '待办';
     else if (App.tab === 'ai') t = 'AI 问答';
     else if (App.tab === 'boards') t = '关系画布';
     else if (App.tab === 'settings') t = '设置';
@@ -962,7 +964,6 @@
     img.className = 'inline-img-el';
     img.dataset.iid = iid;
     img.dataset.w = w;
-    img.style.width = w + 'px';
     img.src = Store.getImage(iid);
     img.contentEditable = 'false';
     img.draggable = false;
@@ -1047,7 +1048,7 @@
       if (it.t === 'img') {
         var w = it.w || 130;
         return '<img class="inline-img-el" contenteditable="false" draggable="false" data-iid="' + RUIBU.esc(it.imageId) + '" data-w="' + w +
-          '" style="width:' + w + 'px" src="' + Store.getImage(it.imageId) + '">';
+          '" src="' + Store.getImage(it.imageId) + '">';
       }
       return '';
     }).join('');
@@ -1502,7 +1503,6 @@
           img.className = 'inline-img-el';
           img.dataset.iid = it.id;
           img.dataset.w = 130;
-          img.style.width = '130px';
           img.src = Store.getImage(it.id);
           img.contentEditable = 'false';
           ab.el.appendChild(img);
@@ -2896,6 +2896,7 @@
     renderBoards();
     updateTitle();
     updateStorageInfo();
+    Todos.refresh();
   }
 
   function updateStorageInfo() {
@@ -2933,6 +2934,10 @@
       if (window.AI && AI.loadHistory) { AI.loadHistory(); App.aiImgs = []; }
       renderAll();
       switchTab('notes');
+      Todos.init(function () {
+        if (layerStack.length) closeAllLayers();
+        switchTab('todos');
+      });
       try { history.pushState({}, ''); } catch (e) { }
     } catch (e) {
       if (window.__showBootError) window.__showBootError('渲染失败：' + e.message + '\n' + (e.stack || ''));

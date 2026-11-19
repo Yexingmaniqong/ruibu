@@ -918,6 +918,13 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit;}
   position:relative;
   margin-top:14px;
   display:flex;flex-direction:column;gap:10px;
+  --note-image-size:min(128px, 20vw);
+}
+@supports (width:1cqw){
+  .note-blocks{
+    container-type:inline-size;
+    --note-image-size:calc((100cqw - 18px) / 4);
+  }
 }
 .note-blocks .blk{position:relative;}
 
@@ -1189,11 +1196,12 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit;}
   line-height:0;cursor:grab;
   transition:box-shadow .15s;
 }
-.inline-img img{width:100%;height:auto;display:block;pointer-events:none;border-radius:7px;}
+.inline-img,.inline-img-el{width:var(--note-image-size);aspect-ratio:1;box-sizing:border-box;}
+.inline-img img{width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;border-radius:7px;}
 .inline-img:hover{box-shadow:0 4px 14px rgba(17,24,39,.12);}
 .inline-img-el{
   display:inline-block;vertical-align:middle;margin:2px 3px;
-  border-radius:8px;border:1px solid var(--line);cursor:grab;
+  border-radius:8px;border:1px solid var(--line);cursor:grab;object-fit:cover;
 }
 #note-blocks .inline-img, #note-blocks .inline-img-el,
 #note-blocks .img-cell, #note-blocks .img-cell img{
@@ -1281,6 +1289,41 @@ body.img-drag-mode, body.img-drag-mode #note-blocks *{
   .topbar-title{font-size:15.5px;margin-left:2px;}
   .menu-btn{display:flex;}
 }
+@media (max-width:430px){
+  .topbar-nav button{width:31px;}
+  .topbar-nav{gap:0;}
+}
+
+.todos-pane{max-width:736px;margin-inline:auto;}
+.todos-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;}
+.todos-heading h1{margin:0;font-size:23px;}
+.todos-heading .primary-btn{display:inline-flex;align-items:center;gap:4px;white-space:nowrap;}
+.todos-heading .ico{width:17px;height:17px;}
+.todo-permissions{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin-bottom:14px;padding:11px 13px;border-radius:10px;
+  background:var(--green-soft);color:var(--text-2);font-size:13px;
+}
+.todo-permissions[hidden]{display:none;}
+.todo-row{
+  display:grid;grid-template-columns:22px minmax(0,1fr) auto;align-items:start;gap:10px;
+  padding:13px 3px;border-bottom:1px solid var(--line);
+}
+.todo-row input[type="checkbox"]{width:18px;height:18px;accent-color:var(--green-2);margin:3px 0;}
+.todo-title{color:var(--text);font-size:16px;overflow-wrap:anywhere;}
+.todo-time,.todo-overdue{font-size:12px;color:var(--text-3);}
+.todo-overdue{color:#ad343f;}
+.todo-completed{margin-top:18px;color:var(--text-2);}
+.todo-completed summary{cursor:pointer;}
+.todo-completed .todo-title{text-decoration:line-through;color:var(--text-3);}
+.todo-actions{display:flex;gap:4px;}
+.todo-link{padding:3px 5px;color:var(--green-2);font-size:13px;white-space:nowrap;}
+.todo-empty{padding:18px 0;color:var(--text-3);}
+.todo-fields{display:grid;gap:11px;}
+.todo-fields label{display:grid;gap:5px;font-size:13px;color:var(--text-2);}
+.todo-fields input{width:100%;min-width:0;}
+.todo-fields p{margin:0;}
+.todo-clear-date{justify-self:start;padding-inline:0;}
 
 /* ---------- AI 附件 ---------- */
 .ai-attach{
@@ -1310,7 +1353,7 @@ body.img-drag-mode, body.img-drag-mode #note-blocks *{
 /* ---------- 图片网格：一行四个 ---------- */
 .img-grid{
   position:relative;display:grid;gap:6px;
-  grid-template-columns:repeat(4, minmax(0, 1fr));
+  grid-template-columns:repeat(4, var(--note-image-size));
 }
 .img-cell{
   position:relative;border-radius:9px;overflow:hidden;

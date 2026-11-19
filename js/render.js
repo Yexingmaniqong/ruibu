@@ -179,9 +179,8 @@
         return;
       }
       if (it.t === 'img') {
-        var w = it.w || 130;
         var src = (global.Store && global.Store.getImage) ? global.Store.getImage(it.imageId) : '';
-        html += '<span class="inline-img" data-drop-item="' + i + '" data-iid="' + esc(it.imageId) + '" style="width:' + w + 'px">' +
+        html += '<span class="inline-img" data-drop-item="' + i + '" data-iid="' + esc(it.imageId) + '">' +
           '<img src="' + esc(src) + '" draggable="false" alt=""></span>';
         return;
       }
