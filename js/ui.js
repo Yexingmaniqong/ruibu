@@ -8,13 +8,19 @@
   var modalTitle = document.getElementById('modal-title');
   var modalBody = document.getElementById('modal-body');
   var modalActions = document.getElementById('modal-actions');
+  var resolveModal = null;
 
   function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
-  function close() {
+  function close(value) {
     mask.classList.add('hidden');
     clear(modalBody);
     clear(modalActions);
+    if (resolveModal) {
+      var resolve = resolveModal;
+      resolveModal = null;
+      resolve(value === undefined ? null : value);
+    }
   }
 
   /**
@@ -22,7 +28,9 @@
    * 返回 Promise，resolve 为被点按钮的 value
    */
   function modal(opts) {
+    close();
     return new Promise(function (resolve) {
+      resolveModal = resolve;
       modalTitle.textContent = opts.title || '';
       clear(modalBody);
       if (typeof opts.bodyHTML === 'string') {
@@ -43,8 +51,7 @@
             if (r === false) return;
             if (r !== undefined) val = r;
           }
-          close();
-          resolve(val);
+          close(val);
         });
         modalActions.appendChild(b);
       });

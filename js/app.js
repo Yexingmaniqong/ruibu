@@ -25,7 +25,7 @@
   window.App = App;
 
   var $ = function (id) { return document.getElementById(id); };
-  var BUILD = '1.0.1';
+  var BUILD = '1.0.3';
   window.__BUILD = BUILD;
   function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
@@ -357,7 +357,7 @@
     return items;
   }
 
-  function openCtxMenu(x, y, items) {
+  function openCtxMenu(x, y, items, above) {
     var mask = $('ctx-mask'), menu = $('ctx-menu');
     clear(menu);
     items.forEach(function (it) {
@@ -371,6 +371,8 @@
       b.className = 'ctx-item' + (it.danger ? ' danger' : '');
       b.innerHTML = '<svg class="ico"><use href="#' + (it.icon || 'i-more') + '"/></svg><span></span>';
       b.lastChild.textContent = it.label;
+      // 保留正文的焦点和选区，软键盘打开时也能插入标签。
+      b.addEventListener('mousedown', function (e) { e.preventDefault(); });
       b.addEventListener('click', function (e) {
         e.stopPropagation();
         hideCtxMenu();
@@ -381,14 +383,18 @@
 
     mask.classList.remove('hidden');
     // 先显示再量尺寸，避免超出屏幕
+    var viewport = window.visualViewport;
+    var startY = viewport ? viewport.offsetTop : 0;
+    var bottom = viewport ? startY + viewport.height : window.innerHeight;
+    menu.style.maxHeight = Math.max(90, (above ? y : bottom) - startY - 20) + 'px';
     menu.style.left = '0px';
     menu.style.top = '0px';
     var r = menu.getBoundingClientRect();
-    var vw = window.innerWidth, vh = window.innerHeight;
+    var vw = window.innerWidth;
     var left = Math.min(x, vw - r.width - 12);
-    var top = Math.min(y, vh - r.height - 12);
+    var top = Math.min(above ? y - r.height : y, bottom - r.height - 12);
     menu.style.left = Math.max(10, left) + 'px';
-    menu.style.top = Math.max(10, top) + 'px';
+    menu.style.top = Math.max(startY + 10, top) + 'px';
     if (navigator.vibrate) { /* noop */ }
   }
 
@@ -482,6 +488,7 @@
   }
 
   function closeNote(silent) {
+    cancelImageDrag();
     var note = App.noteId ? Store.getNote(App.noteId) : null;
     if (note && App.activeBlock && App.activeBlock.el && App.activeBlock.el.isContentEditable) {
       saveBlockEdits(App.activeBlock.el, note, App.activeBlock.block);
@@ -504,7 +511,6 @@
 
     el.addEventListener('click', function (e) {
       if (el.isContentEditable) return;
-      if (App.suppressBlockClick) return;             // 刚拖完图，别顺手进编辑态
       if (e.target.closest('.inline-img') || e.target.closest('.inline-img-el')) return;
       startEditBlock(el, note, b);
     });
@@ -515,489 +521,437 @@
     el.contentEditable = 'false';
     el.classList.remove('editing');
     el.innerHTML = RUIBU.rich(b.items || []);
-    bindInlineImages(el, b);
   }
 
-  /* ---------- 图片拖动：长按 → 虚影跟随 → 绿线指示落点 ---------- */
-  var dragState = null;
+  /* ---------- 笔记图片拖动 ---------- */
+  var IMAGE_HANDLE = '.inline-img, .inline-img-el, .img-cell, .blk-image';
+  var imageDrag = null;
+  var blockDragClick = false;
 
-  function bindInlineImages(root, b) {
-    var nodes = [];
-    if (root.matches && root.matches('.inline-img, .blk-image, .img-cell, .inline-img-el')) nodes.push(root);
-    Array.prototype.forEach.call(root.querySelectorAll('.inline-img, .blk-image, .img-cell, .inline-img-el'), function (n) {
-      nodes.push(n);
-    });
-    nodes.forEach(function (wrap) {
-      if (wrap.__bound) return;
-      wrap.__bound = true;
-      var img = wrap.tagName === 'IMG' ? wrap : wrap.querySelector('img');
-      if (!img) return;
+  function bindImageDrag() {
+    var box = $('note-blocks');
+    var scroller = box.closest('.sheet-scroll');
 
-      img.addEventListener('pointerdown', function (e) {
-        if (e.button !== undefined && e.button !== 0 && e.pointerType === 'mouse') return;
+    document.addEventListener('pointerdown', function () { blockDragClick = false; }, true);
+    box.addEventListener('pointerdown', function (e) {
+      var handle = imageHandle(e.target);
+      if (!handle || e.button !== 0) return;
+      // Chromium 的编辑器会尝试选中图片或移动插入光标。
+      e.preventDefault();
+      if (e.pointerType === 'touch' || imageDrag) return;
+      startImageDrag(handle, e.pointerId, e.clientX, e.clientY, false);
+    }, true);
+    box.addEventListener('touchstart', function (e) {
+      var handle = imageHandle(e.target);
+      if (!handle || imageDrag || e.touches.length !== 1) return;
+      var touch = e.changedTouches[0];
+      startImageDrag(handle, touch.identifier, touch.clientX, touch.clientY, true);
+    }, { passive: true });
+
+    box.addEventListener('contextmenu', function (e) {
+      if (imageDrag || imageHandle(e.target)) e.preventDefault();
+    }, true);
+    box.addEventListener('click', function (e) {
+      if (blockDragClick && e.detail) {
         e.preventDefault();
-        startImageDrag(e, wrap, img, b);
-      });
-      img.addEventListener('click', function (e) { e.stopPropagation(); });
+        e.stopImmediatePropagation();
+        return;
+      }
+      var handle = imageHandle(e.target);
+      if (!handle) return;
+      var img = handle.matches('img') ? handle : handle.querySelector('img');
+      if (img && img.getAttribute('src')) viewImage(img.src);
+      e.stopPropagation();
+    }, true);
+    scroller.addEventListener('scroll', function () {
+      if (imageDrag && !imageDrag.active) cancelImageDrag();
+      if (imageDrag && imageDrag.active) queueImageDrag(imageDrag);
     });
+    window.addEventListener('blur', cancelImageDrag);
   }
 
-  function startImageDrag(e, wrap, img, b) {
-    if (dragState) return;
-    var rect = wrap.getBoundingClientRect();
+  function imageHandle(node) {
+    if (!node.closest || node.closest('.blk-del')) return null;
+    return node.closest(IMAGE_HANDLE);
+  }
+
+  function startImageDrag(handle, pointerId, x, y, touch) {
+    var note = Store.getNote(App.noteId);
+    var img = handle.matches('img') ? handle : handle.querySelector('img');
+    var blockEl = handle.closest('[data-bid]');
+    if (!note || !img || !blockEl || !img.getAttribute('src')) return;
+    var ordinal = Array.from(blockEl.querySelectorAll('.inline-img, .inline-img-el')).indexOf(handle);
+    var rect = handle.getBoundingClientRect();
     var st = {
-      pointerId: e.pointerId,
-      sx: e.clientX, sy: e.clientY,
-      wrap: wrap, img: img, block: b,
-      iid: img.dataset.iid || (b && b.imageId),
-      src: img.src,
-      w: Math.round(rect.width),          // 记住拖走前的显示宽度
-      active: false,
-      timer: null
+      handle: handle, img: img, grid: handle.closest('.img-grid'),
+      noteId: note.id, blockId: blockEl.dataset.bid, ordinal: ordinal,
+      width: rect.width,
+      startX: x, startY: y, x: x, y: y, active: false, moved: false,
+      listeners: new AbortController(), preview: null, frame: 0, tick: 0
     };
-    dragState = st;
+    imageDrag = st;
+    var opts = { capture: true, signal: st.listeners.signal };
 
-    if (e.pointerType === 'touch') {
-      // 按住更久才进入拖动，滑动屏幕时不会误触
-      st.timer = setTimeout(function () { beginDrag(st); }, 480);
-    }
-
-    function onMove(ev) {
-      if (ev.pointerId !== st.pointerId) return;
+    function update(point, event) {
+      st.x = point.clientX;
+      st.y = point.clientY;
+      var distance = Math.hypot(st.x - st.startX, st.y - st.startY);
       if (!st.active) {
-        if (st.dead) return;
-        if (st.timer) {
-          if (Math.abs(ev.clientX - st.sx) > 8 || Math.abs(ev.clientY - st.sy) > 8) {
-            clearTimeout(st.timer); st.timer = null;
-            st.dead = true;            // 手指动了 = 在滑动，这次按压根就不是拖图
-          }
-          return;
-        }
-        if (Math.abs(ev.clientX - st.sx) < 7 && Math.abs(ev.clientY - st.sy) < 7) return;
-        beginDrag(st);
+        if (distance < (touch ? 9 : 6)) return;
+        if (touch) { cancelImageDrag(); return; }
+        liftImage(st);
       }
-      moveGhost(st, ev.clientX, ev.clientY);
-      showDropIndicator(ev.clientX, ev.clientY, st);
+      if (event.cancelable) event.preventDefault();
+      if (distance >= 6) st.moved = true;
+      queueImageDrag(st);
+    }
+    function findTouch(e) {
+      return Array.from(e.changedTouches).find(function (t) { return t.identifier === pointerId; });
     }
 
-    function onCancel() {
-      document.removeEventListener('pointermove', onMove, true);
-      document.removeEventListener('pointerup', onUp, true);
-      document.removeEventListener('pointercancel', onCancel, true);
-      if (st.timer) clearTimeout(st.timer);
-      hideDropIndicator();
-      endDrag(st);          // 只复原，不落子
-      dragState = null;
+    if (touch) {
+      st.hold = setTimeout(function () { liftImage(st); }, 420);
+      document.addEventListener('touchstart', function (e) {
+        if (e.touches.length > 1) cancelImageDrag();
+      }, opts);
+      document.addEventListener('touchmove', function (e) {
+        var point = findTouch(e);
+        if (point) update(point, e);
+      }, { capture: true, passive: false, signal: opts.signal });
+      document.addEventListener('touchend', function (e) {
+        var point = findTouch(e);
+        if (!point) return;
+        if (st.active && e.cancelable) e.preventDefault();
+        finishImageDrag(st, point);
+      }, { capture: true, passive: false, signal: opts.signal });
+      document.addEventListener('touchcancel', function (e) {
+        if (findTouch(e)) cancelImageDrag();
+      }, opts);
+    } else {
+      document.addEventListener('pointermove', function (e) {
+        if (e.pointerId === pointerId) update(e, e);
+      }, opts);
+      document.addEventListener('pointerup', function (e) {
+        if (e.pointerId === pointerId) finishImageDrag(st, e);
+      }, opts);
+      document.addEventListener('pointercancel', function (e) {
+        if (e.pointerId === pointerId) cancelImageDrag();
+      }, opts);
     }
-
-    function onUp(ev) {
-      if (ev.pointerId !== st.pointerId) return;
-      document.removeEventListener('pointermove', onMove, true);
-      document.removeEventListener('pointerup', onUp, true);
-      document.removeEventListener('pointercancel', onCancel, true);
-      if (st.timer) clearTimeout(st.timer);
-      var tgt = DragTarget;          // 先记住落点，收线会把它清掉
-      var wasActive = st.active;
-      var point = { x: ev.clientX, y: ev.clientY };
-      hideDropIndicator();
-      endDrag(st);
-      if (wasActive) {
-        App.suppressBlockClick = true;
-        setTimeout(function () { App.suppressBlockClick = false; }, 400);
-        completeDrop(st, point.x, point.y, tgt);
-      } else if (st.src) {
-        viewImage(st.src);
-      }
-      dragState = null;
-    }
-
-    document.addEventListener('pointermove', onMove, true);
-    document.addEventListener('pointerup', onUp, true);
-    document.addEventListener('pointercancel', onCancel, true);
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      cancelImageDrag();
+    }, opts);
   }
 
-  function beginDrag(st) {
-    if (st.active) return;
+  function liftImage(st) {
+    if (!st.handle.isConnected || App.noteId !== st.noteId) { cancelImageDrag(); return; }
     st.active = true;
-    st.timer = null;
-    st.img.classList.add('img-dragging');
-    st.img.style.pointerEvents = 'none';
+    blockDragClick = true;
+    st.handle.classList.add('drag-source');
     document.body.classList.add('img-drag-mode');
-    makeGhost(st);
+    st.ghost = document.createElement('div');
+    st.ghost.className = 'image-drag-ghost';
+    var img = new Image();
+    img.src = st.img.src;
+    st.ghost.appendChild(img);
+    document.body.appendChild(st.ghost);
+    st.caret = document.createElement('div');
+    st.caret.className = 'image-drop-caret';
+    st.caret.hidden = true;
+    document.body.appendChild(st.caret);
+    st.bin = $('image-drop-bin');
+    st.bin.hidden = false;
+    updateImageDrag(st, 0);
   }
 
-  function makeGhost(st) {
-    var g = document.getElementById('drag-ghost');
-    if (!g) {
-      g = document.createElement('div');
-      g.id = 'drag-ghost';
-      document.body.appendChild(g);
+  function queueImageDrag(st) {
+    if (!st.frame) st.frame = requestAnimationFrame(function (time) { updateImageDrag(st, time); });
+  }
+
+  function updateImageDrag(st, time) {
+    st.frame = 0;
+    var box = $('note-blocks');
+    var scroller = box.closest('.sheet-scroll');
+    var sheet = $('sheet-note');
+    var viewport = window.visualViewport;
+    var bottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+    st.bin.style.bottom = Math.max(0, sheet.getBoundingClientRect().bottom - bottom) + 'px';
+    var thumbnail = 45;
+    var left = st.x + 17;
+    if (left + thumbnail > window.innerWidth - 8) left = st.x - thumbnail - 17;
+    var top = st.y - thumbnail - 15;
+    if (top < (viewport ? viewport.offsetTop : 0) + 8) top = st.y + 15;
+    st.ghost.style.transform = 'translate3d(' + left + 'px,' + top + 'px,0)';
+
+    var drop = imageDropTarget(st, box);
+    previewImageGrid(st, drop && drop.kind === 'reorder' ? drop : null);
+    st.bin.classList.toggle('is-over', !!drop && drop.kind === 'delete');
+    var line = drop && drop.line;
+    st.caret.hidden = !line;
+    if (line) {
+      st.caret.classList.toggle('is-slot', !!line.slot);
+      st.caret.style.transform = 'translate3d(' + line.x + 'px,' + line.y + 'px,0)';
+      st.caret.style.width = line.w + 'px';
+      st.caret.style.height = line.h + 'px';
     }
-    g.innerHTML = '';
-    var im = new Image();
-    im.src = st.src;
-    g.appendChild(im);
-    var size = Math.max(64, Math.min(120, st.w || 90));
-    g.style.width = size + 'px';
-    g.style.height = size + 'px';
-    g.style.display = 'block';
+
+    if (!st.moved || (drop && drop.kind === 'delete')) { st.tick = 0; return; }
+    var scrollRect = scroller.getBoundingClientRect();
+    var bin = st.bin.getBoundingClientRect();
+    var shownBottom = Math.min(scrollRect.bottom, bin.top);
+    var edge = Math.min(52, (shownBottom - scrollRect.top) / 4);
+    if (edge <= 0 || st.x < scrollRect.left || st.x > scrollRect.right) return;
+    var delta = st.y < scrollRect.top + edge && st.y >= scrollRect.top - 8
+      ? -Math.min(1, (scrollRect.top + edge - st.y) / edge)
+      : st.y > shownBottom - edge && st.y <= shownBottom
+        ? (st.y - shownBottom + edge) / edge : 0;
+    if (!delta) { st.tick = 0; return; }
+    var previous = scroller.scrollTop;
+    var elapsed = st.tick ? Math.min(32, time - st.tick) : 16;
+    st.tick = time;
+    scroller.scrollTop += delta * elapsed * 0.75;
+    if (scroller.scrollTop !== previous) queueImageDrag(st);
   }
 
-  function moveGhost(st, x, y) {
-    var g = document.getElementById('drag-ghost');
-    if (!g) return;
-    var w = g.offsetWidth || 90;
-    g.style.left = (x - w / 2) + 'px';
-    g.style.top = (y - w / 2) + 'px';
-  }
-
-  function endDrag(st) {
-    if (st.img) {
-      st.img.classList.remove('img-dragging');
-      st.img.style.pointerEvents = '';
-    }
+  function cancelImageDrag() {
+    var st = imageDrag;
+    if (!st) return;
+    imageDrag = null;
+    clearTimeout(st.hold);
+    cancelAnimationFrame(st.frame);
+    st.listeners.abort();
+    if (!st.active) return;
+    previewImageGrid(st, null);
+    st.handle.classList.remove('drag-source');
     document.body.classList.remove('img-drag-mode');
-    var g = document.getElementById('drag-ghost');
-    if (g) g.style.display = 'none';
+    st.ghost.remove();
+    st.caret.remove();
+    st.bin.hidden = true;
+    st.bin.classList.remove('is-over');
   }
 
-  /* ---------- 落点指示：文字里是竖线，图片之间是竖线，块之间是横线 ---------- */
-  function indEl() {
-    var line = document.getElementById('drop-caret');
-    if (!line) {
-      line = document.createElement('div');
-      line.id = 'drop-caret';
-      document.body.appendChild(line);
-    }
-    return line;
+  function finishImageDrag(st, point) {
+    st.x = point.clientX;
+    st.y = point.clientY;
+    // 以抬手坐标重新计算，避免提交上一帧的预览位置。
+    var moved = st.moved || Math.hypot(st.x - st.startX, st.y - st.startY) >= 6;
+    var drop = st.active && moved ? imageDropTarget(st, $('note-blocks')) : null;
+    var textItems = drop && drop.kind === 'text' ? itemsAtImageDrop(drop) : null;
+    cancelImageDrag();
+    if (drop) applyImageDrop(st, drop, textItems);
   }
 
-  function showDropIndicator(x, y, st) {
-    var line = indEl();
+  function containsPoint(rect, x, y) {
+    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+  }
+
+  function imageDropTarget(st, box) {
+    var x = st.x, y = st.y;
+    if (containsPoint(st.bin.getBoundingClientRect(), x, y)) return { kind: 'delete' };
     var under = document.elementFromPoint(x, y);
-    var grid = under && under.closest ? under.closest('.img-grid') : null;
+    var scroller = box.closest('.sheet-scroll');
+    if (!under || under.closest('.sheet-scroll') !== scroller) return null;
+    var bounds = box.getBoundingClientRect();
+    if (x < bounds.left - 8 || x > bounds.right + 8 || y < bounds.top - 12 || y > bounds.bottom + 38) return null;
 
-    // 1) 落在图片网格里
-    if (grid) {
-      var cells = Array.prototype.slice.call(grid.querySelectorAll('.img-cell'));
-      clearSwapHint();
-      if (!cells.length) {
-        line.className = 'drop-caret';
-        line.style.width = '3px';
-        line.style.left = grid.getBoundingClientRect().left + 'px';
-        line.style.top = grid.getBoundingClientRect().top + 'px';
-        line.style.height = grid.getBoundingClientRect().height + 'px';
-        line.style.display = 'block';
-        DragTarget = { kind: 'grid', grid: grid, index: 0 };
-        return;
-      }
-      // 先看落在哪个格子里
-      var hitIdx = -1;
-      for (var ci = 0; ci < cells.length; ci++) {
-        var r0 = cells[ci].getBoundingClientRect();
-        if (x >= r0.left && x <= r0.right && y >= r0.top && y <= r0.bottom) { hitIdx = ci; break; }
-      }
-      // 落在格子中间 50% 区域 → 交换；靠近左右边缘 → 插到那个缝隙
-      if (hitIdx >= 0) {
-        var rr = cells[hitIdx].getBoundingClientRect();
-        var rel = (x - rr.left) / rr.width;
-        if (rel > 0.28 && rel < 0.72) {
-          cells[hitIdx].classList.add('swapping');
-          DragTarget = { kind: 'swap', grid: grid, cell: cells[hitIdx], index: hitIdx, block: st ? st.block : null };
-          line.style.display = 'none';
-          return;
-        }
-      }
-      // 插入位置：只在指针所在的那一行里算
-      var rowTop = hitIdx >= 0 ? cells[hitIdx].getBoundingClientRect().top : null;
-      if (rowTop === null) {
-        // 没落在任何格子里：找最接近的一行
-        var bestRow = cells[0].getBoundingClientRect();
-        for (var q2 = 0; q2 < cells.length; q2++) {
-          var rq = cells[q2].getBoundingClientRect();
-          if (y >= rq.top && y <= rq.bottom) { bestRow = rq; break; }
-          if (Math.abs(y - rq.top) < Math.abs(y - bestRow.top)) bestRow = rq;
-        }
-        rowTop = bestRow.top;
-      }
-      var rowCells = [];
-      for (var q3 = 0; q3 < cells.length; q3++) {
-        if (Math.abs(cells[q3].getBoundingClientRect().top - rowTop) < 4) rowCells.push(q3);
-      }
-      if (!rowCells.length) rowCells = [0];
-      var idx = rowCells[rowCells.length - 1] + 1;      // 默认插在这行末尾之后
-      var baseCell = cells[rowCells[rowCells.length - 1]];
-      var after = true;
-      for (var k2 = 0; k2 < rowCells.length; k2++) {
-        var ci2 = rowCells[k2];
-        var rk = cells[ci2].getBoundingClientRect();
-        if (x < rk.left + rk.width / 2) { idx = ci2; baseCell = cells[ci2]; after = false; break; }
-      }
-      var rb = baseCell.getBoundingClientRect();
-      line.className = 'drop-caret';
-      line.style.width = '3px';
-      line.style.left = (after ? rb.right + 1 : rb.left - 3) + 'px';
-      line.style.top = rb.top + 'px';
-      line.style.height = rb.height + 'px';       // 只画这一行，不画整列
-      line.style.display = 'block';
-      DragTarget = { kind: 'grid', grid: grid, index: idx, block: st ? st.block : null };
-      return;
-    }
+    var grid = under.closest('.img-grid');
+    if (grid && grid.parentElement === box) return gridImageDrop(grid, st);
+    var el = under.closest('.blk-text');
+    if (el && el.parentElement === box) return textImageDrop(el, under, x, y);
 
-    // 2) 落在文字里 → 字符之间画竖线
-    var textEl = under && under.closest ? under.closest('.blk-text') : null;
-    if (textEl) {
-      var range = rangeFromPoint(x, y);
-      var rect = null;
-      if (range) {
-        try { rect = range.getBoundingClientRect(); } catch (e) { rect = null; }
-        if (rect && (rect.height === 0 || (rect.width === 0 && rect.height === 0))) rect = null;
-      }
-      if (rect) {
-        line.className = 'drop-caret';
-        line.style.width = '3px';
-        line.style.left = (rect.left - 1) + 'px';
-        line.style.top = rect.top + 'px';
-        line.style.height = Math.max(20, Math.min(34, rect.height || 22)) + 'px';
-        line.style.display = 'block';
-        DragTarget = { kind: 'text', el: textEl, blockId: textEl.dataset.bid, range: range, x: x, y: y };
-        return;
-      }
-      // 文字块边缘（拿不到 caret）→ 当作插到这一块后面
-      var tr2 = textEl.getBoundingClientRect();
-      line.className = 'drop-caret horizontal';
-      line.style.left = tr2.left + 'px';
-      line.style.width = tr2.width + 'px';
-      line.style.top = (tr2.bottom + 2) + 'px';
-      line.style.height = '3px';
-      line.style.display = 'block';
-      DragTarget = { kind: 'after-block', blockId: textEl.dataset.bid };
-      return;
-    }
-
-    // 3) 块与块之间 → 横线
-    var blocks = document.querySelectorAll('#note-blocks .blk');
-    var top3 = 0, left3 = 0, width3 = 0, found = false;
-    for (var k = 0; k < blocks.length; k++) {
-      var br = blocks[k].getBoundingClientRect();
-      if (y < br.top + br.height / 2) {
-        top3 = br.top - 4; left3 = br.left; width3 = br.width; found = true;
-        DragTarget = { kind: 'block-index', index: k };
-        break;
-      }
-    }
-    if (!found && blocks.length) {
-      var last = blocks[blocks.length - 1].getBoundingClientRect();
-      top3 = last.bottom + 4; left3 = last.left; width3 = last.width;
-      DragTarget = { kind: 'block-index', index: blocks.length };
-    }
-    line.className = 'drop-caret horizontal';
-    line.style.left = left3 + 'px';
-    line.style.top = top3 + 'px';
-    line.style.width = width3 + 'px';
-    line.style.height = '3px';
-    line.style.display = 'block';
+    var children = Array.from(box.querySelectorAll(':scope > .blk-text, :scope > .img-grid'));
+    var next = children.find(function (child) { return y < child.getBoundingClientRect().top; });
+    var anchor = next || children[children.length - 1];
+    if (!anchor) return null;
+    var edge = anchor.matches('.img-grid') ? (next ? anchor.firstElementChild : anchor.lastElementChild) : anchor;
+    var rect = anchor.getBoundingClientRect();
+    return { kind: 'block', id: edge.dataset.bid, after: !next,
+      line: { x: rect.left, y: (next ? rect.top : rect.bottom) - 9, w: 18, h: 18, slot: true } };
   }
 
-  var DragTarget = null;
-
-  function clearSwapHint() {
-    Array.prototype.forEach.call(document.querySelectorAll('.img-cell.swapping'), function (el) {
-      el.classList.remove('swapping');
+  function gridImageDrop(grid, st) {
+    var cells = Array.from(grid.children);
+    var rect = grid.getBoundingClientRect();
+    // offsetLeft/Top 不受预览 transform 影响，指针总是命中固定格位。
+    var slots = cells.map(function (cell) {
+      return { x: rect.left + cell.offsetLeft, y: rect.top + cell.offsetTop,
+        w: cell.offsetWidth, h: cell.offsetHeight };
     });
+    var index = 0, rowDistance = Infinity, columnDistance = Infinity;
+    slots.forEach(function (slot, i) {
+      var dy = Math.abs(st.y - slot.y - slot.h / 2);
+      var dx = Math.abs(st.x - slot.x - slot.w / 2);
+      if (dy < rowDistance || (dy === rowDistance && dx < columnDistance)) {
+        index = i; rowDistance = dy; columnDistance = dx;
+      }
+    });
+    if (grid === st.grid) {
+      return { kind: 'reorder', id: cells[index].dataset.bid, after: index > cells.indexOf(st.handle),
+        cells: cells, index: index, slots: slots, grid: grid };
+    }
+    var slot = slots[index];
+    var after = st.x >= slot.x + slot.w / 2;
+    return { kind: 'block', id: cells[index].dataset.bid, after: after,
+      line: { x: (after ? slot.x + slot.w : slot.x) - 9, y: slot.y + (slot.h - 18) / 2,
+        w: 18, h: 18, slot: true } };
   }
 
-  function hideDropIndicator() {
-    clearSwapHint();
-    var line = document.getElementById('drop-caret');
-    if (line) line.style.display = 'none';
-    DragTarget = null;
+  function previewImageGrid(st, drop) {
+    if (!drop) {
+      if (st.preview) st.preview.cells.forEach(function (cell) { cell.style.transform = ''; });
+      st.preview = null;
+      return;
+    }
+    if (st.preview && st.preview.grid === drop.grid && st.preview.index === drop.index) return;
+    st.preview = drop;
+    var order = drop.cells.slice();
+    order.splice(order.indexOf(st.handle), 1);
+    order.splice(drop.index, 0, st.handle);
+    order.forEach(function (cell, i) {
+      var source = drop.slots[drop.cells.indexOf(cell)], slot = drop.slots[i];
+      cell.style.transform = 'translate(' + (slot.x - source.x) + 'px,' + (slot.y - source.y) + 'px)';
+    });
   }
 
   function rangeFromPoint(x, y) {
     if (document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
     if (document.caretPositionFromPoint) {
-      var p = document.caretPositionFromPoint(x, y);
-      if (p) {
-        var r = document.createRange();
-        r.setStart(p.offsetNode, p.offset);
-        r.collapse(true);
-        return r;
+      var position = document.caretPositionFromPoint(x, y);
+      if (position) {
+        var range = document.createRange();
+        range.setStart(position.offsetNode, position.offset);
+        range.collapse(true);
+        return range;
       }
     }
     return null;
   }
 
-  /** 从原位置摘掉图片（整块 / 网格里的整块 / 行内） */
-  function detachImage(note, st) {
-    var src = st.block;
-    var iid = st.iid;
-    if (!src) return;
-    if (src.type === 'image') {
-      note.blocks = note.blocks.filter(function (b) { return b.id !== src.id; });
-      return;
+  function textImageDrop(el, under, x, y) {
+    var atomic = under.closest('.inline-img, .inline-img-el, [data-tag]');
+    var range, rect;
+    if (atomic && el.contains(atomic)) {
+      rect = atomic.getBoundingClientRect();
+      range = document.createRange();
+      if (x < rect.left + rect.width / 2) range.setStartBefore(atomic);
+      else range.setStartAfter(atomic);
+      range.collapse(true);
+      return { kind: 'text', el: el, range: range,
+        line: { x: x < rect.left + rect.width / 2 ? rect.left - 2 : rect.right,
+          y: Math.min(Math.max(y - 10, rect.top), Math.max(rect.top, rect.bottom - 20)), w: 3, h: 20 } };
     }
-    var idx = -1;
-    (src.items || []).forEach(function (it, i) {
-      if (idx < 0 && it.t === 'img' && it.imageId === iid) idx = i;
-    });
-    if (idx >= 0) {
-      src.items.splice(idx, 1);
-      if (!src.items.length) src.items = [{ t: 'text', v: '' }];
+    range = rangeFromPoint(x, y);
+    if (!range || !el.contains(range.startContainer)) {
+      range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
     }
+    rect = range.getBoundingClientRect();
+    var bounds = el.getBoundingClientRect();
+    return { kind: 'text', el: el, range: range,
+      line: { x: rect.height ? rect.left - 1 : bounds.left, y: rect.height ? rect.top : bounds.top,
+        w: 3, h: Math.min(23, Math.max(18, rect.height)) } };
   }
 
-  /** 把 caret 换算成文字块里的纯字符偏移 */
-  function caretOffset(el, range) {
-    try {
-      var r = document.createRange();
-      r.setStart(el, 0);
-      r.setEnd(range.startContainer, range.startOffset);
-      return r.toString().length;
-    } catch (e) {
-      return 0;
+  function itemsAtImageDrop(drop) {
+    var el = drop.el, range = drop.range;
+    if (el.isContentEditable) {
+      // 克隆编辑器并标记实际 DOM 边界，保留换行、标签和图片的相对顺序。
+      var node = range.startContainer, path = [];
+      while (node !== el) {
+        path.unshift(Array.prototype.indexOf.call(node.parentNode.childNodes, node));
+        node = node.parentNode;
+      }
+      var clone = el.cloneNode(true);
+      var cloneNode = path.reduce(function (parent, index) { return parent.childNodes[index]; }, clone);
+      var marker = document.createElement('span');
+      marker.dataset.dropMarker = '';
+      // 分离的 DOM Range 也能插到文字节点内部。
+      var at = document.createRange();
+      at.setStart(cloneNode, range.startOffset);
+      at.collapse(true);
+      at.insertNode(marker);
+      return serializeBlock(clone);
     }
+
+    var note = Store.getNote(App.noteId);
+    var block = note.blocks.find(function (b) { return b.id === el.dataset.bid; });
+    var items = block.items.slice();
+    var container = range.startContainer;
+    if (container === el) {
+      var next = el.childNodes[range.startOffset];
+      var index = next && next.dataset ? Number(next.dataset.dropItem) : items.length;
+      items.splice(index, 0, { t: 'drop' });
+      return items;
+    }
+    var element = container.nodeType === 1 ? container : container.parentElement;
+    var itemEl = element.closest('[data-drop-item]');
+    var i = itemEl ? Number(itemEl.dataset.dropItem) : items.length;
+    var item = items[i];
+    if (item && item.t === 'text') {
+      var prefix = range.cloneRange();
+      prefix.setStart(itemEl, 0);
+      var fragment = document.createElement('span');
+      fragment.appendChild(prefix.cloneContents());
+      fragment.querySelectorAll('br').forEach(function (br) { br.replaceWith('\n'); });
+      var plain = fragment.textContent;
+      var raw = item.v || '';
+      var offset = raw.length;
+      if (raw.startsWith(plain)) {
+        offset = plain.length;
+      } else if (container.nodeType === 3 && container.parentElement === itemEl) {
+        // 富文本标记留在源数据里。仍可在标记旁的普通文字间落子。
+        var start = raw.indexOf(container.nodeValue);
+        if (start >= 0) offset = start + range.startOffset;
+      }
+      items.splice(i, 1, { t: 'text', v: raw.slice(0, offset) }, { t: 'drop' }, { t: 'text', v: raw.slice(offset) });
+    } else {
+      items.splice(i, 0, { t: 'drop' });
+    }
+    return items;
   }
 
-  /** 在文字块的 items 里按字符偏移插入图片（先摘掉原来的位置），返回是否成功 */
-  function placeInlineImage(note, b, iid, w, offset) {
-    var items = (b.items || [{ t: 'text', v: '' }]).slice();
-    // 1) 先摘掉同 id 的旧图（可能就在这个块里）
-    var removedW = w;
-    for (var i = items.length - 1; i >= 0; i--) {
-      if (items[i].t === 'img' && items[i].imageId === iid) {
-        removedW = items[i].w || w;
-        items.splice(i, 1);
-      }
+  function applyImageDrop(st, drop, textItems) {
+    var note = Store.getNote(st.noteId);
+    if (!note || App.noteId !== note.id || drop.id === st.blockId && st.ordinal < 0) return;
+    var source = note.blocks.find(function (b) { return b.id === st.blockId; });
+    var dest = note.blocks.find(function (b) { return b.id === (drop.el ? drop.el.dataset.bid : drop.id); });
+    if (!source || (drop.kind !== 'delete' && !dest)) return;
+    var active = App.activeBlock;
+    var sourceItems = source === dest && textItems ? textItems : (
+      active && active.block === source ? serializeBlock(active.el) : source.items);
+    var img, imageIndex;
+    if (source.type === 'image') {
+      img = { t: 'img', imageId: source.imageId, w: source.w || Math.round(st.width) };
+    } else {
+      var ordinal = st.ordinal;
+      imageIndex = sourceItems.findIndex(function (item) { return item.t === 'img' && ordinal-- === 0; });
+      if (imageIndex < 0) return;
+      img = sourceItems[imageIndex];
     }
-    // 2) 找到偏移所在的文字项并拆开
-    var acc = 0, placed = false;
-    for (var j = 0; j < items.length; j++) {
-      var it = items[j];
-      if (it.t !== 'text') continue;
-      var len = (it.v || '').length;
-      if (offset <= acc + len) {
-        var local = offset - acc;
-        var head = (it.v || '').slice(0, local);
-        var tail = (it.v || '').slice(local);
-        var repl = [];
-        if (head) repl.push({ t: 'text', v: head });
-        repl.push({ t: 'img', imageId: iid, w: removedW });
-        if (tail) repl.push({ t: 'text', v: tail });
-        items.splice.apply(items, [j, 1].concat(repl));
-        placed = true;
-        break;
-      }
-      acc += len;
-    }
-    if (!placed) items.push({ t: 'img', imageId: iid, w: removedW });
-    // 3) 合并相邻文字项
-    var merged = [];
-    items.forEach(function (x) {
-      var last = merged[merged.length - 1];
-      if (x.t === 'text' && last && last.t === 'text') { last.v += x.v; return; }
-      merged.push(x);
-    });
-    if (!merged.length) merged = [{ t: 'text', v: '' }];
-    b.items = merged;
-    return true;
-  }
+    if (textItems && !textItems.some(function (item) { return item.t === 'drop'; })) return;
 
-  function completeDrop(st, x, y, target) {
-    var note = App.noteId ? Store.getNote(App.noteId) : null;
-    if (!note) return;
-    // 源块如果正在编辑，先把 DOM 内容写回数据，避免摘图时对不上
-    if (st.block && st.block.type === 'text') {
-      var srcEl = document.querySelector('#note-blocks .blk-text[data-bid="' + st.block.id + '"]');
-      if (srcEl && srcEl.__finishEdit) {
-        var fin = srcEl.__finishEdit;
-        srcEl.__finishEdit = null;
-        fin();
-      }
+    if (active && active.el.__finishEdit) active.el.__finishEdit();
+    if (source.type === 'image') {
+      note.blocks.splice(note.blocks.indexOf(source), 1);
+    } else {
+      source.items = sourceItems.slice();
+      source.items.splice(imageIndex, 1);
+      if (source === dest && textItems) textItems = source.items;
     }
-    var iid = st.iid;
-    if (!iid) return;
-    var keepW = Math.max(80, Math.min(240, st.w || 130));
-
-    // 0) 拖到另一张图中间 → 交换两张图的位置
-    if (target && target.kind === 'swap') {
-      var bId = target.cell ? target.cell.dataset.bid : null;
-      var srcId = st.block ? st.block.id : null;
-      var ia = -1, ib = -1;
-      if (srcId && bId) {
-        for (var q = 0; q < note.blocks.length; q++) {
-          if (note.blocks[q].id === srcId) ia = q;
-          if (note.blocks[q].id === bId) ib = q;
-        }
-      }
-      if (ia >= 0 && ib >= 0 && ia !== ib) {
-        var tmp = note.blocks[ia];
-        note.blocks[ia] = note.blocks[ib];
-        note.blocks[ib] = tmp;
-        Store.setBlocks(note.id, note.blocks);
-        renderBlocks(note);
-        renderAll();
-        return;
-      }
-      // 源是文字里的行内图：退化成插入
-      target = { kind: 'grid', grid: target.grid, index: target.index };
+    if (textItems) {
+      var at = textItems.findIndex(function (item) { return item.t === 'drop'; });
+      textItems.splice(at, 1, img);
+      dest.items = textItems;
+    } else if (drop.kind !== 'delete') {
+      var block = source.type === 'image' ? source : Store.newBlock('image', { imageId: img.imageId });
+      block.w = img.w;
+      note.blocks.splice(note.blocks.indexOf(dest) + (drop.after ? 1 : 0), 0, block);
     }
 
-    // 1) 插到图片网格的某个位置（按锚点块定位，避免 detach 后索引错位）
-    if (target && target.kind === 'grid') {
-      var cells = Array.prototype.slice.call(target.grid.querySelectorAll('.img-cell'));
-      var anchorId = (target.index < cells.length) ? cells[target.index].dataset.bid : null;
-      detachImage(note, st);
-      var at2;
-      if (anchorId) {
-        at2 = note.blocks.findIndex(function (b) { return b.id === anchorId; });
-        if (at2 < 0) at2 = note.blocks.length;
-      } else {
-        // 追加到这组图片的最后
-        var lastImg = cells.length ? cells[cells.length - 1].dataset.bid : null;
-        at2 = note.blocks.length;
-        if (lastImg) {
-          var li = note.blocks.findIndex(function (b) { return b.id === lastImg; });
-          if (li >= 0) at2 = li + 1;
-        }
-      }
-      note.blocks.splice(at2, 0, { id: Store.uid('b_'), type: 'image', imageId: iid });
-      Store.setBlocks(note.id, note.blocks);
-      renderBlocks(note);
-      renderAll();
-      return;
-    }
-
-    // 2) 插到文字里（按字符偏移插到 items 里，不依赖浏览器 range 的可靠性）
-    if (target && target.kind === 'text') {
-      var el = target.el;
-      var b = (note.blocks || []).filter(function (x2) { return x2.id === target.blockId; })[0];
-      if (!b) return;
-      // 先把落点换算成纯字符偏移（在可编辑 DOM 上算，图片不占字符）
-      if (!el.isContentEditable) startEditBlock(el, note, b);
-      var range = rangeFromPoint(x, y);
-      var offset = null;
-      if (range && el.contains(range.startContainer)) offset = caretOffset(el, range);
-      if (offset === null) {
-        offset = (b.items || []).reduce(function (acc, it) {
-          return acc + (it.t === 'text' ? (it.v || '').length : 0);
-        }, 0);
-      }
-      // 同步结束编辑（把 DOM 里的文字写回 items），再走数据层插入
-      if (el.__finishEdit) { var fin = el.__finishEdit; el.__finishEdit = null; fin(); }
-      App.activeBlock = null;
-      detachImage(note, st);
-      placeInlineImage(note, b, iid, keepW, offset);
-      Store.setBlocks(note.id, note.blocks);
-      renderBlocks(note);
-      renderAll();
-      return;
-    }
-
-    // 3) 插到块之间
-    var at = (target && target.kind === 'block-index') ? target.index : note.blocks.length;
-    detachImage(note, st);
-    note.blocks.splice(Math.min(at, note.blocks.length), 0, { id: Store.uid('b_'), type: 'image', imageId: iid });
     Store.setBlocks(note.id, note.blocks);
     renderBlocks(note);
     renderAll();
@@ -1011,6 +965,7 @@
     img.style.width = w + 'px';
     img.src = Store.getImage(iid);
     img.contentEditable = 'false';
+    img.draggable = false;
     var sel = window.getSelection();
     if (sel) { sel.removeAllRanges(); sel.addRange(range.cloneRange()); }
     range.deleteContents();
@@ -1028,7 +983,6 @@
     el.contentEditable = 'true';
     el.classList.add('editing');
     el.innerHTML = itemsToEditable(b.items || []);
-    bindInlineImages(el, b);       // 编辑态里的图片同样可以拖
     el.focus();
     placeCaretEnd(el);
     App.activeBlock = { el: el, note: note, block: b };
@@ -1062,7 +1016,7 @@
     function onOutside(e) {
       if (el.contains(e.target)) return;
       // 底栏按钮不抢焦点：交给它自己的 click 处理
-      if (e.target.closest && e.target.closest('#editor-bar')) return;
+      if (e.target.closest && e.target.closest('#editor-bar, #ctx-menu')) return;
       finish();
     }
     function finish() {
@@ -1092,7 +1046,7 @@
       }
       if (it.t === 'img') {
         var w = it.w || 130;
-        return '<img class="inline-img-el" contenteditable="false" data-iid="' + RUIBU.esc(it.imageId) + '" data-w="' + w +
+        return '<img class="inline-img-el" contenteditable="false" draggable="false" data-iid="' + RUIBU.esc(it.imageId) + '" data-w="' + w +
           '" style="width:' + w + 'px" src="' + Store.getImage(it.imageId) + '">';
       }
       return '';
@@ -1100,8 +1054,14 @@
   }
 
   function serializeBlock(el) {
-    var items = [], buf = '';
+    var items = [], buf = '', dropOffset = null;
     function flush() {
+      if (dropOffset !== null) {
+        if (dropOffset) items.push({ t: 'text', v: buf.slice(0, dropOffset) });
+        items.push({ t: 'drop' });
+        buf = buf.slice(dropOffset);
+        dropOffset = null;
+      }
       if (buf) { items.push({ t: 'text', v: buf }); buf = ''; }
     }
     (function walk(node) {
@@ -1110,6 +1070,10 @@
         if (n.nodeType === 3) { buf += n.nodeValue; continue; }
         if (n.nodeType !== 1) continue;
         if (n.tagName === 'BR') { buf += '\n'; continue; }
+        if (n.hasAttribute('data-drop-marker')) {
+          dropOffset = buf.length;
+          continue;
+        }
         if (n.tagName === 'IMG') {
           flush();
           items.push({ t: 'img', imageId: n.dataset.iid, w: parseInt(n.dataset.w || n.style.width || 130, 10) || 130 });
@@ -1148,14 +1112,12 @@
     Store.setBlocks(note.id, note.blocks);
     if (!silent) {
       paintRich(el, b);
-      bindInlineImages($('note-blocks'), b);
       renderAll();
     }
   }
 
   /** 输入 "#标签 " 后按空格 → 变成标签板块，空格后面是正文 */
   function makeTagChip(el) {
-    if (App.composeDraft) return false;   // 新建页面里不自动生成标签板块
     var sel = window.getSelection();
     if (!sel || !sel.rangeCount || !sel.isCollapsed) return false;
     var r = sel.getRangeAt(0);
@@ -1226,20 +1188,36 @@
     });
     el.appendChild(del);
 
-    bindInlineImages(el, b);
     return el;
   }
 
   /* ---------- 渲染 ---------- */
   function renderBlocks(note) {
     var box = $('note-blocks');
+    cancelImageDrag();
     clear(box);
-    var oldCaret = document.getElementById('drop-caret');
-    if (oldCaret) oldCaret.style.display = 'none';
 
     if (!note.blocks || !note.blocks.length) {
       note.blocks = [Store.newBlock('text', { text: '' })];
     }
+    // 旧版本会把从空编辑器添加的相册照片保存为行内图。
+    // 只迁移纯图片块，保留真正的图文混排和图片顺序。
+    var changed = false;
+    note.blocks = note.blocks.flatMap(function (block) {
+      if (block.type !== 'text') return [block];
+      var items = block.items || [];
+      var images = items.filter(function (item) { return item.t === 'img'; });
+      var hasText = items.some(function (item) {
+        return item.t === 'tag' || item.t === 'text' && (item.v || '').replace(/\u200b/g, '').trim();
+      });
+      if (!images.length || hasText) return [block];
+      changed = true;
+      return images.map(function (item) {
+        var image = Store.newBlock('image', { imageId: item.imageId });
+        image.w = item.w;
+        return image;
+      });
+    });
     // 只保留一个空的文字块（避免出现一摞「写点什么…」）
     var empties = [];
     note.blocks.forEach(function (b) {
@@ -1250,8 +1228,9 @@
       note.blocks = note.blocks.filter(function (b) {
         return empties.indexOf(b) === -1 || b === keep;
       });
-      Store.setBlocks(note.id, note.blocks);
+      changed = true;
     }
+    if (changed) Store.setBlocks(note.id, note.blocks);
 
     // 连续的整块图片合成「一行四个」的网格
     var i = 0;
@@ -1263,19 +1242,25 @@
           run.push(note.blocks[i]);
           i++;
         }
-        box.appendChild(imageGridEl(note, run, i - run.length));
+        box.appendChild(imageGridEl(note, run));
       } else {
         box.appendChild(textBlockEl(note, b));
         i++;
       }
     }
+    if (note.blocks[note.blocks.length - 1].type === 'image') {
+      var addText = document.createElement('button');
+      addText.type = 'button';
+      addText.className = 'note-add-text';
+      addText.textContent = '继续写文字…';
+      addText.addEventListener('click', function () { ensureActiveBlock(note, true); });
+      box.appendChild(addText);
+    }
   }
 
-  function imageGridEl(note, run, startIdx) {
+  function imageGridEl(note, run) {
     var grid = document.createElement('div');
     grid.className = 'img-grid';
-    grid.dataset.n = String(Math.min(4, run.length));
-    grid.dataset.start = String(startIdx || 0);
     run.forEach(function (b) {
       var cell = document.createElement('div');
       cell.className = 'img-cell';
@@ -1300,7 +1285,6 @@
       });
       cell.appendChild(del);
 
-      bindInlineImages(cell, b);
       grid.appendChild(cell);
     });
     return grid;
@@ -1328,7 +1312,6 @@
 
       if (act === 'album' || act === 'camera') {
         App.imgTarget = 'note';
-        App.insertIntoBlock = App.activeBlock ? App.activeBlock.block.id : null;
         pickImages(act);
         return;
       }
@@ -1338,63 +1321,62 @@
         return;
       }
       if (act === 'tag') {
-        if (App.composeDraft) {
-          var ab0 = ensureActiveBlock(note);
-          if (ab0) insertAtCaret('#');
-          return;
-        }
         var tags = Store.allTags();
-        if (!tags.length) {
-          UI.toast('还没有标签：打 #名字 再按空格就生成一个');
-          return;
-        }
         var r2 = btn.getBoundingClientRect();
         var menuItems = tags.map(function (tg) {
           return {
             label: '#' + tg.tag,
             icon: 'i-hash',
-            onClick: function () { insertTagChip(note, tg.tag); }
+            onClick: function () { insertNoteTag(note, tg.tag); }
           };
         });
-        if (menuItems.length > 8) menuItems = menuItems.slice(0, 8);
-        openCtxMenu(r2.left, r2.top - 8, menuItems);
+        menuItems.unshift({
+          label: '输入新标签', icon: 'i-plus',
+          onClick: function () { insertNoteTag(note); }
+        });
+        openCtxMenu(r2.left, r2.top - 8, menuItems, true);
         return;
       }
     });
   }
 
-  function insertTagChip(note, tag) {
+  function insertNoteTag(note, tag) {
     var ab = ensureActiveBlock(note);
     if (!ab) return;
     var el = ab.el;
     el.focus();
-    var chip = document.createElement('span');
-    chip.className = 'inline-tag';
-    chip.contentEditable = 'false';
-    chip.dataset.tag = tag;
-    chip.textContent = '#' + tag;
-    var space = document.createTextNode(' ');
+    var input = document.createTextNode(tag ? ' ' : '#');
     var sel = window.getSelection();
-    if (sel && sel.rangeCount) {
-      var r = sel.getRangeAt(0);
-      r.deleteContents();
-      r.insertNode(chip);
-      chip.parentNode.insertBefore(space, chip.nextSibling);
-      var r2 = document.createRange();
-      r2.setStart(space, 1);
-      r2.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(r2);
-    } else {
-      el.appendChild(chip);
-      el.appendChild(space);
+    var range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+    if (!range || !el.contains(range.startContainer) || !el.contains(range.endContainer)) {
+      range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
     }
+    range.collapse(false);
+    range.insertNode(input);
+    if (tag) {
+      var chip = document.createElement('span');
+      chip.className = 'inline-tag';
+      chip.contentEditable = 'false';
+      chip.dataset.tag = tag;
+      chip.textContent = '#' + tag;
+      input.before(chip);
+    }
+    range.setStart(input, input.length);
+    range.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(range);
     saveBlockEdits(el, note, ab.block, true);
   }
 
-  function ensureActiveBlock(note) {
-    if (App.activeBlock && App.activeBlock.el && App.activeBlock.el.isConnected) return App.activeBlock;
-    var last = (note.blocks || []).filter(function (x) { return x.type === 'text'; }).pop();
+  function ensureActiveBlock(note, append) {
+    if (App.activeBlock && App.activeBlock.note.id === note.id && App.activeBlock.el.isContentEditable) {
+      if (!append) return App.activeBlock;
+      App.activeBlock.el.__finishEdit();
+    }
+    var last = note.blocks[note.blocks.length - 1];
+    if (last && last.type !== 'text') last = null;
     if (!last) {
       last = Store.newBlock('text', { text: '' });
       note.blocks = (note.blocks || []).concat([last]);
@@ -1450,17 +1432,66 @@
   /* ================= 选图（相册 / 拍照） ================= */
   function pickImages(mode) {
     App.imgMode = mode || 'album';
+    if (mode === 'camera' && !/Android|iPhone|iPad/i.test(navigator.userAgent)) {
+      openComputerCamera();
+      return;
+    }
     var input = (mode === 'camera') ? $('file-camera') : $('file-image');
     if (!input) return;
     input.value = '';
     input.click();
   }
 
+  async function openComputerCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      UI.toast('当前页面无法访问摄像头');
+      return;
+    }
+    var stream;
+    var noteId = App.noteId;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      if (App.noteId !== noteId) return;
+      var view = document.createElement('video');
+      view.className = 'camera-preview';
+      view.autoplay = true;
+      view.muted = true;
+      view.playsInline = true;
+      view.srcObject = stream;
+      var canvas = await UI.modal({
+        title: '拍照', bodyNode: view, actions: [
+          { label: '取消', value: null },
+          { label: '拍照', cls: 'primary', onClick: function () {
+            if (!view.videoWidth) return false;
+            var frame = document.createElement('canvas');
+            frame.width = view.videoWidth;
+            frame.height = view.videoHeight;
+            frame.getContext('2d').drawImage(view, 0, 0);
+            return frame;
+          } }
+        ]
+      });
+      if (canvas && App.noteId === noteId) {
+        var blob = await new Promise(function (resolve) { canvas.toBlob(resolve, 'image/jpeg', .9); });
+        if (blob && App.noteId === noteId) {
+          await onFilesPicked([new File([blob], 'photo.jpg', { type: 'image/jpeg' })]);
+        }
+      }
+    } catch (e) {
+      UI.toast('无法打开摄像头，请检查权限和设备');
+    } finally {
+      if (stream) stream.getTracks().forEach(function (track) { track.stop(); });
+    }
+  }
+
   /** 图片插进当前笔记：有正在编辑的块就插在光标处，否则追加一个新块 */
   async function insertImagesIntoNote(note, items) {
     if (!note || !items.length) return;
     var ab = App.activeBlock;
-    if (ab && ab.el && ab.el.isConnected && ab.el.isContentEditable) {
+    var editing = ab && ab.note.id === note.id && ab.el.isConnected && ab.el.isContentEditable;
+    if (editing && items.length === 1 && serializeBlock(ab.el).some(function (item) {
+      return item.t === 'tag' || item.t === 'text' && item.v.trim();
+    })) {
       items.forEach(function (it) {
         var sel = window.getSelection();
         var range = (sel && sel.rangeCount) ? sel.getRangeAt(0) : null;
@@ -1477,9 +1508,10 @@
           ab.el.appendChild(img);
         }
       });
-      saveBlockEdits(ab.el, note, ab.block);
+      saveBlockEdits(ab.el, note, ab.block, true);
       return;
     }
+    if (editing) ab.el.__finishEdit();
     var blocks = (note.blocks || []).slice();
     var news = items.map(function (it) { return Store.newBlock('image', { imageId: it.id }); });
     blocks = blocks.concat(news);
@@ -2523,7 +2555,9 @@
         switchTab(b.dataset.nav);
       });
     });
-    // 插入线兜底：任何点击/滚动都收掉\n    document.addEventListener('pointerup', hideDropIndicator, true);\n    document.addEventListener('pointercancel', hideDropIndicator, true);\n    document.addEventListener('touchstart', hideDropIndicator, { capture: true, passive: true });\n    window.addEventListener('scroll', hideDropIndicator, true);\n\n    // 顶栏图标导航（手机上代替抽屉里的菜单）
+    bindImageDrag();
+
+    // 顶栏图标导航（手机上代替抽屉里的菜单）
     Array.prototype.forEach.call(document.querySelectorAll('[data-nav-icon]'), function (b) {
       b.addEventListener('click', function () {
         if (layerStack.length) closeAllLayers();

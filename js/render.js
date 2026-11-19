@@ -167,28 +167,25 @@
   /** 渲染一个文字块：文字（含 markdown/公式）+ 行内图片 + 行内标签板块 */
   function rich(items) {
     if (!items || !items.length) return '';
-    var html = '', buf = '';
-    function flush() {
-      if (buf) { html += inline(buf); buf = ''; }
-    }
-    items.forEach(function (it) {
+    var html = '';
+    items.forEach(function (it, i) {
       if (!it) return;
-      if (it.t === 'text') { buf += it.v || ''; return; }
+      if (it.t === 'text') {
+        if (it.v) html += '<span data-drop-item="' + i + '">' + inline(it.v) + '</span>';
+        return;
+      }
       if (it.t === 'tag') {
-        flush();
-        html += '<span class="inline-tag" data-tag="' + esc(it.v) + '">#' + esc(it.v) + '</span>';
+        html += '<span class="inline-tag" data-drop-item="' + i + '" data-tag="' + esc(it.v) + '">#' + esc(it.v) + '</span>';
         return;
       }
       if (it.t === 'img') {
-        flush();
         var w = it.w || 130;
         var src = (global.Store && global.Store.getImage) ? global.Store.getImage(it.imageId) : '';
-        html += '<span class="inline-img" data-iid="' + esc(it.imageId) + '" style="width:' + w + 'px">' +
+        html += '<span class="inline-img" data-drop-item="' + i + '" data-iid="' + esc(it.imageId) + '" style="width:' + w + 'px">' +
           '<img src="' + esc(src) + '" draggable="false" alt=""></span>';
         return;
       }
     });
-    flush();
     return html;
   }
 
