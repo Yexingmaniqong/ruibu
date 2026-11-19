@@ -13,19 +13,16 @@
     keyword: '',
     noteId: null,
     composeImgs: [],
-    imgTarget: null,
-    imgMode: 'album',
+    imageRequest: null,
     suppressClick: false,
     activeBlock: null,      // 正在编辑的文字块
-    pendingNoteId: null,
-    insertAfterBlock: null,
     composeDraft: null,
     viewer: null
   };
   window.App = App;
 
   var $ = function (id) { return document.getElementById(id); };
-  var BUILD = '1.0.4';
+  var BUILD = '1.0.5';
   window.__BUILD = BUILD;
   function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
@@ -331,9 +328,7 @@
       { label: '打开', icon: 'i-note', onClick: function () { openNote(note.id); } },
       {
         label: '加图片', icon: 'i-image', onClick: function () {
-          App.imgTarget = 'note';
-          App.pendingNoteId = note.id;
-          pickImages('album');
+          pickImages('album', { noteId: note.id });
         }
       },
       {
@@ -406,29 +401,119 @@
 
   /* ================= 图片查看器 ================= */
   function viewImage(src) {
-    if (!src) return;
+    if (!src || App.viewer) return;
     var mask = document.createElement('div');
     mask.className = 'img-viewer';
+    mask.setAttribute('role', 'dialog');
+    mask.setAttribute('aria-modal', 'true');
+    mask.setAttribute('aria-label', '查看图片');
+    var stage = document.createElement('div');
+    stage.className = 'iv-stage';
     var img = document.createElement('img');
     img.src = src;
-    var close = document.createElement('div');
+    img.alt = '图片预览';
+    img.draggable = false;
+    stage.appendChild(img);
+    var close = document.createElement('button');
+    close.type = 'button';
     close.className = 'iv-close';
+    close.setAttribute('aria-label', '关闭图片');
     close.innerHTML = '<svg class="ico"><use href="#i-close"/></svg>';
-    mask.appendChild(img);
-    mask.appendChild(close);
+    close.addEventListener('click', goBack);
+    var controls = document.createElement('div');
+    controls.className = 'iv-controls';
+    var scale = 1, x = 0, y = 0;
+    var pointers = new Map();
+    var resize = new AbortController();
+    function control(label, text, action) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('aria-label', label);
+      btn.title = label;
+      btn.textContent = text;
+      btn.addEventListener('click', action);
+      controls.appendChild(btn);
+      return btn;
+    }
+    var zoomOut = control('缩小', '−', function () { zoom(scale / 1.4); render(); });
+    var reset = control('恢复适应屏幕', '100%', function () { scale = 1; x = y = 0; render(); });
+    var zoomIn = control('放大', '+', function () { zoom(scale * 1.4); render(); });
+    mask.append(stage, controls, close);
+
+    function render() {
+      var maxX = Math.max(0, (img.offsetWidth * scale - stage.clientWidth) / 2);
+      var maxY = Math.max(0, (img.offsetHeight * scale - stage.clientHeight) / 2);
+      x = Math.max(-maxX, Math.min(maxX, x));
+      y = Math.max(-maxY, Math.min(maxY, y));
+      img.style.transform = 'translate3d(' + x + 'px,' + y + 'px,0) scale(' + scale + ')';
+      reset.textContent = Math.round(scale * 100) + '%';
+      zoomOut.disabled = scale <= 1;
+      zoomIn.disabled = scale >= 6;
+      stage.classList.toggle('is-zoomed', scale > 1);
+    }
+    function zoom(next, anchor) {
+      next = Math.max(1, Math.min(6, next));
+      var bounds = stage.getBoundingClientRect();
+      var cx = anchor ? anchor.x - bounds.left - bounds.width / 2 : 0;
+      var cy = anchor ? anchor.y - bounds.top - bounds.height / 2 : 0;
+      x = cx + (x - cx) * next / scale;
+      y = cy + (y - cy) * next / scale;
+      scale = next;
+    }
+    function midpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+    function distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+    stage.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' && e.button !== 0 || pointers.size >= 2) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      stage.setPointerCapture(e.pointerId);
+    });
+    stage.addEventListener('pointermove', function (e) {
+      if (!pointers.has(e.pointerId)) return;
+      var before = Array.from(pointers.values());
+      var previous = pointers.get(e.pointerId);
+      var next = { x: e.clientX, y: e.clientY };
+      pointers.set(e.pointerId, next);
+      if (pointers.size === 2) {
+        var after = Array.from(pointers.values());
+        var from = midpoint(before[0], before[1]), to = midpoint(after[0], after[1]);
+        var length = distance(before[0], before[1]);
+        if (length > 0) zoom(scale * distance(after[0], after[1]) / length, from);
+        x += to.x - from.x;
+        y += to.y - from.y;
+      } else {
+        x += next.x - previous.x;
+        y += next.y - previous.y;
+      }
+      render();
+    });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function (type) {
+      stage.addEventListener(type, function (e) { pointers.delete(e.pointerId); });
+    });
+    stage.addEventListener('wheel', function (e) {
+      e.preventDefault();
+      zoom(scale * (e.deltaY < 0 ? 1.2 : 1 / 1.2), { x: e.clientX, y: e.clientY });
+      render();
+    }, { passive: false });
+    mask.addEventListener('click', function (e) {
+      if (e.target === mask) { goBack(); return; }
+      if (e.target !== stage || scale > 1) return;
+      var box = img.getBoundingClientRect();
+      if (e.clientX < box.left || e.clientX > box.right || e.clientY < box.top || e.clientY > box.bottom) goBack();
+    });
 
     function shut() {
-      if (mask.parentNode) mask.parentNode.removeChild(mask);
+      resize.abort();
+      mask.remove();
       App.viewer = null;
-      document.removeEventListener('keydown', onKey);
     }
-    function onKey(e) { if (e.key === 'Escape') { popLayer(); } }
 
-    mask.addEventListener('click', function () { popLayer(); });
-    document.addEventListener('keydown', onKey);
     document.body.appendChild(mask);
+    img.addEventListener('load', render);
+    window.addEventListener('resize', render, { signal: resize.signal });
     App.viewer = { close: shut };
     pushLayer('image', shut);
+    render();
   }
 
   /* ================= 层级栈：多级返回 ================= */
@@ -491,10 +576,7 @@
 
   function closeNote(silent) {
     cancelImageDrag();
-    var note = App.noteId ? Store.getNote(App.noteId) : null;
-    if (note && App.activeBlock && App.activeBlock.el && App.activeBlock.el.isContentEditable) {
-      saveBlockEdits(App.activeBlock.el, note, App.activeBlock.block);
-    }
+    if (App.activeBlock && App.activeBlock.el.__finishEdit) App.activeBlock.el.__finishEdit();
     App.activeBlock = null;
     App.noteId = null;
     destroyInline();
@@ -1021,13 +1103,14 @@
       finish();
     }
     function finish() {
+      if (el.__finishEdit !== finish) return;
+      el.__finishEdit = null;
       el.removeEventListener('input', onInput);
       el.removeEventListener('blur', onBlur);
       el.removeEventListener('keydown', onKey);
       document.removeEventListener('pointerdown', onOutside, true);
       if (timer) clearTimeout(timer);
-      saveBlockEdits(el, note, b);
-      if (el.__finishEdit) el.__finishEdit = null;
+      if (el.isContentEditable) saveBlockEdits(el, note, b);
       if (App.activeBlock && App.activeBlock.el === el) App.activeBlock = null;
     }
     function onBlur() { finish(); }
@@ -1195,6 +1278,7 @@
   /* ---------- 渲染 ---------- */
   function renderBlocks(note) {
     var box = $('note-blocks');
+    if (App.activeBlock && App.activeBlock.el.__finishEdit) App.activeBlock.el.__finishEdit();
     cancelImageDrag();
     clear(box);
 
@@ -1312,8 +1396,7 @@
       var act = btn.dataset.ed;
 
       if (act === 'album' || act === 'camera') {
-        App.imgTarget = 'note';
-        pickImages(act);
+        pickImages(act, { noteId: note.id });
         return;
       }
       if (act === 'more') {
@@ -1431,19 +1514,19 @@
   }
 
   /* ================= 选图（相册 / 拍照） ================= */
-  function pickImages(mode) {
-    App.imgMode = mode || 'album';
+  function pickImages(mode, request) {
     if (mode === 'camera' && !/Android|iPhone|iPad/i.test(navigator.userAgent)) {
-      openComputerCamera();
+      openComputerCamera(request);
       return;
     }
     var input = (mode === 'camera') ? $('file-camera') : $('file-image');
     if (!input) return;
+    App.imageRequest = request;
     input.value = '';
     input.click();
   }
 
-  async function openComputerCamera() {
+  async function openComputerCamera(request) {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       UI.toast('当前页面无法访问摄像头');
       return;
@@ -1475,7 +1558,7 @@
       if (canvas && App.noteId === noteId) {
         var blob = await new Promise(function (resolve) { canvas.toBlob(resolve, 'image/jpeg', .9); });
         if (blob && App.noteId === noteId) {
-          await onFilesPicked([new File([blob], 'photo.jpg', { type: 'image/jpeg' })]);
+          await onFilesPicked([new File([blob], 'photo.jpg', { type: 'image/jpeg' })], request);
         }
       }
     } catch (e) {
@@ -1517,7 +1600,7 @@
     blocks = blocks.concat(news);
     note.blocks = blocks;
     Store.setBlocks(note.id, blocks);
-    renderBlocks(note);
+    if (App.noteId === note.id && !$('sheet-note').classList.contains('hidden')) renderBlocks(note);
     renderAll();
   }
 
@@ -1526,27 +1609,7 @@
     if (!note) return;
     await insertImagesIntoNote(note, ids.map(function (id) { return { id: id }; }));
 
-    if (note.canvas) {
-      var nodes = note.canvas.nodes || (note.canvas.nodes = []);
-      var maxY = 0;
-      nodes.forEach(function (n) { if (n.y + n.h > maxY) maxY = n.y + n.h; });
-      var cellW = 250, cellH = 200, gap = 26;
-      var cols = ids.length <= 2 ? Math.max(1, ids.length) : 3;
-      var startY = maxY + gap;
-      for (var i = 0; i < ids.length; i++) {
-        var s = await imgSize(Store.getImage(ids[i]));
-        var ratio = s.h / s.w;
-        var w = cellW, h = Math.round(w * ratio);
-        if (h > cellH) { h = cellH; w = Math.round(h / ratio); }
-        nodes.push({
-          id: Store.uid('nd_'), type: 'image', imageId: ids[i],
-          x: (i % cols) * (cellW + gap),
-          y: startY + Math.floor(i / cols) * (cellH + gap),
-          w: w, h: h
-        });
-      }
-      Store.save();
-    }
+    await syncNoteCanvasImages(note);
   }
 
   /* ================= 清理重复图片 ================= */
@@ -1619,7 +1682,10 @@
   }
 
   /* ================= 内嵌画布（笔记下方） ================= */
+  var inlineRender = 0;
+
   function destroyInline() {
+    inlineRender++;
     if (App.inlineBoard) { App.inlineBoard.destroy(); App.inlineBoard = null; }
     var tb = $('ic-toolbar');
     if (tb) tb.classList.add('hidden');
@@ -1630,15 +1696,18 @@
     destroyInline();
     if (!note || !note.canvas) { wrap.classList.add('hidden'); return; }
     wrap.classList.remove('hidden');
+    var generation = inlineRender;
+    syncNoteCanvasImages(note);
 
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
+        if (generation !== inlineRender || App.noteId !== note.id) return;
         var host = $('ic-host');
         if (!host) return;
         App.inlineBoard = new CanvasBoard(host, {
           editable: true,
-          onChange: function (d) { Store.updateNote(note.id, { canvas: d }); },
-          onViewChange: function (d) { note.canvas = d; Store.save(); },
+          onChange: function (d) { storeNoteCanvas(note, d, true); },
+          onViewChange: function (d) { storeNoteCanvas(note, d); },
           onOpenImage: function (imgId) { viewImage(Store.getImage(imgId)); },
           onSelectionChange: function (sid) {
             $('ic-toolbar').classList.toggle('hidden', !sid);
@@ -1663,22 +1732,19 @@
     });
   }
 
-  /* 新增图片后，等内嵌画布重建完再把视角拉回全部内容 */
-  function fitInlineSoon() {
-    setTimeout(function () { if (App.inlineBoard) App.inlineBoard.fitView(); }, 220);
-  }
-
   /* ================= 画布 ================= */
   function openCanvas(ctx) {
+    var note = ctx.mode === 'note' ? Store.getNote(ctx.noteId) : null;
+    if (ctx.mode === 'note' && !note) return;
     App.ctx = ctx;
     $('sheet-canvas').classList.remove('hidden');
     pushLayer('canvas', function () { closeCanvas(); });
 
     var title = '', data = null;
     if (ctx.mode === 'note') {
-      var note = Store.getNote(ctx.noteId);
       title = '笔记画布';
-      data = note.canvas;
+      ensureNoteCanvas(note);
+      syncNoteCanvasImages(note);
     } else {
       var b = Store.getBoard(ctx.boardId);
       title = b.title;
@@ -1689,6 +1755,7 @@
 
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
+        if (App.ctx !== ctx || $('sheet-canvas').classList.contains('hidden')) return;
         if (App.board) { App.board.destroy(); App.board = null; }
         App.board = new CanvasBoard($('canvas-host'), {
           editable: true,
@@ -1708,6 +1775,11 @@
           }
         });
 
+        if (note) data = note.canvas;
+        else {
+          var current = Store.getBoard(ctx.boardId);
+          if (current) data = { nodes: current.nodes, edges: current.edges, view: current.view };
+        }
         if (data) {
           App.board.setData(data);
           var hasContent = (data.nodes || []).length > 0;
@@ -1726,10 +1798,10 @@
   }
 
   /** 当前视角下是否还有节点可见（至少 40px 露出） */
-  function contentVisible(board, hostEl) {
-    if (!board || !board.nodes.length || !hostEl) return false;
+  function contentVisible(board, hostEl, nodes) {
+    if (!board || !hostEl) return false;
     var r = hostEl.getBoundingClientRect();
-    return board.nodes.some(function (n) {
+    return (nodes || board.nodes).some(function (n) {
       var sx = board.view.x + n.x * board.view.scale;
       var sy = board.view.y + n.y * board.view.scale;
       var sw = n.w * board.view.scale, sh = n.h * board.view.scale;
@@ -1740,11 +1812,11 @@
   }
 
   /* 全部节点是否都完整落在视口内（内嵌画布用，换设备后自动复位） */
-  function contentFits(board, hostEl) {
+  function contentFits(board, hostEl, nodes) {
     if (!board || !board.nodes.length || !hostEl) return false;
     var r = hostEl.getBoundingClientRect();
     if (!r.width || !r.height) return false;
-    return board.nodes.every(function (n) {
+    return (nodes || board.nodes).every(function (n) {
       var sx = board.view.x + n.x * board.view.scale;
       var sy = board.view.y + n.y * board.view.scale;
       var sw = n.w * board.view.scale, sh = n.h * board.view.scale;
@@ -1771,12 +1843,7 @@
     if (App.ctx.mode === 'note') {
       var note = Store.getNote(App.ctx.noteId);
       if (!note) return;
-      if (bump) {
-        Store.updateNote(note.id, { canvas: d });
-      } else {
-        note.canvas = d;
-        Store.save();
-      }
+      storeNoteCanvas(note, d, bump);
     } else {
       var b = Store.getBoard(App.ctx.boardId);
       if (b) {
@@ -1808,42 +1875,98 @@
     }
   }
 
-  async function buildNoteCanvas(note) {
-    var imgs = note.imageIds || [];
-    var nodes = [];
-    var cols = imgs.length <= 2 ? 1 : (imgs.length <= 6 ? 2 : 3);
-    var gapX = 26, gapY = 26, cellW = 250, cellH = 200;
+  function storeNoteCanvas(note, patch, bump) {
+    var data = Object.assign({}, note.canvas, patch);
+    if (bump) Store.updateNote(note.id, { canvas: data });
+    else { note.canvas = data; Store.save(); }
+  }
 
-    var sizes = await Promise.all(imgs.map(function (id) {
-      return new Promise(function (resolve) {
-        var im = new Image();
-        im.onload = function () { resolve({ w: im.naturalWidth, h: im.naturalHeight }); };
-        im.onerror = function () { resolve({ w: 4, h: 3 }); };
-        im.src = Store.getImage(id);
-      });
-    }));
-
-    imgs.forEach(function (id, i) {
-      var s = sizes[i];
-      var ratio = s.h / s.w;
-      var w = cellW;
-      var h = Math.round(w * ratio);
-      if (h > cellH) { h = cellH; w = Math.round(h / ratio); }
-      var col = i % cols, row = Math.floor(i / cols);
-      nodes.push({
-        id: Store.uid('nd_'), type: 'image', imageId: id,
-        x: col * (cellW + gapX), y: row * (cellH + gapY), w: w, h: h
-      });
-    });
-
-    if (!nodes.length) {
-      nodes.push({
+  function ensureNoteCanvas(note) {
+    if (note.canvas) return;
+    var nodes = note.imageIds.length ? [] : [{
         id: Store.uid('nd_'), type: 'text',
         text: '在这里放图片、写关键词，用箭头连起来',
         x: 0, y: 0, w: 200, h: 70
-      });
+    }];
+    storeNoteCanvas(note, { nodes: nodes, edges: [], view: { x: 0, y: 0, scale: 1 }, copiedImageIds: [] }, true);
+  }
+
+  async function canvasImageNodes(ids) {
+    return Promise.all(ids.map(async function (id) {
+      var size = await imgSize(Store.getImage(id));
+      var scale = Math.min(250 / size.w, 200 / size.h);
+      return { id: Store.uid('nd_'), type: 'image', imageId: id,
+        w: Math.max(1, Math.round(size.w * scale)), h: Math.max(1, Math.round(size.h * scale)) };
+    }));
+  }
+
+  function placeCanvasImageNodes(nodes, added) {
+    var left = nodes.length ? nodes.reduce(function (x, node) { return Math.min(x, node.x); }, Infinity) : 0;
+    var top = nodes.length ? nodes.reduce(function (y, node) { return Math.max(y, node.y + node.h); }, -Infinity) + 26 : 0;
+    var columns = added.length <= 2 ? added.length : added.length <= 6 ? 2 : 3;
+    added.forEach(function (node, index) {
+      node.x = left + (index % columns) * 276;
+      node.y = top + Math.floor(index / columns) * 226;
+    });
+    return nodes.concat(added);
+  }
+
+  function refreshCanvasImages(board, nodes, added) {
+    if (!board) return;
+    board.nodes = nodes;
+    board.render();
+    if (!board.host.clientWidth || !board.host.clientHeight || contentFits(board, board.host, added)) return;
+    board.fitView();
+    if (!contentFits(board, board.host, added)) board.fitView(false, added);
+  }
+
+  function addNoteCanvasImages(note, added, copiedImageIds) {
+    if (!note.canvas || !added.length) return;
+    var nodes = placeCanvasImageNodes(note.canvas.nodes || [], added);
+    var patch = { nodes: nodes };
+    if (copiedImageIds) patch.copiedImageIds = copiedImageIds;
+    storeNoteCanvas(note, patch, true);
+    if (App.noteId === note.id) refreshCanvasImages(App.inlineBoard, nodes, added);
+    if (App.ctx && App.ctx.mode === 'note' && App.ctx.noteId === note.id) refreshCanvasImages(App.board, nodes, added);
+  }
+
+  async function syncNoteCanvasImages(note) {
+    if (!note.canvas) return;
+    var ids = new Set(note.imageIds);
+    if (!Array.isArray(note.canvas.copiedImageIds)) {
+      var existing = (note.canvas.nodes || []).map(function (node) { return node.imageId; });
+      storeNoteCanvas(note, { copiedImageIds: Array.from(new Set(existing.filter(function (id) { return ids.has(id); }))) });
     }
-    return { nodes: nodes, edges: [], view: { x: 0, y: 0, scale: 1 } };
+    var known = new Set(note.canvas.copiedImageIds);
+    var missing = Array.from(ids).filter(function (id) { return !known.has(id) && Store.getImage(id); });
+    if (!missing.length) return;
+    var candidates = await canvasImageNodes(missing);
+    if (Store.getNote(note.id) !== note || !note.canvas) return;
+    // Other imports may have finished reading images in the meantime.
+    var copied = new Set(note.canvas.copiedImageIds || []);
+    var current = new Set(note.imageIds);
+    var added = candidates.filter(function (node) {
+      if (!current.has(node.imageId) || copied.has(node.imageId)) return false;
+      copied.add(node.imageId);
+      return true;
+    });
+    addNoteCanvasImages(note, added, Array.from(copied));
+  }
+
+  async function addImagesToCanvas(ctx, ids) {
+    if (!ids.length) return;
+    var added = await canvasImageNodes(ids);
+    if (ctx.mode === 'note') {
+      var note = Store.getNote(ctx.noteId);
+      if (note) addNoteCanvasImages(note, added);
+    } else {
+      var board = Store.getBoard(ctx.boardId);
+      if (!board) return;
+      board.nodes = placeCanvasImageNodes(board.nodes || [], added);
+      board.updatedAt = Date.now();
+      Store.save();
+      if (App.ctx === ctx) refreshCanvasImages(App.board, board.nodes, added);
+    }
   }
 
   /* ================= AI 问答（DeepSeek） ================= */
@@ -2170,8 +2293,7 @@
     var addImg = $('ai-addimg');
     if (addImg) {
       addImg.addEventListener('click', function () {
-        App.imgTarget = 'ai';
-        pickImages('album');
+        pickImages('album', { ai: true });
       });
     }
 
@@ -2440,56 +2562,37 @@
     });
   }
 
-  async function processImageFiles(files, target) {
+  async function processImageFiles(files) {
     if (!files || !files.length) return [];
     UI.toast('处理图片中…', 5000);
     var added = [];
     for (var i = 0; i < files.length; i++) {
       try {
         var id = await Store.addImage(files[i]);
-        var dataUrl = Store.getImage(id);
-        added.push({ id: id, dataUrl: dataUrl });
-
-        if (target === 'canvas' && App.board) {
-          var s1 = await imgSize(dataUrl);
-          App.board.addImageNode(id, s1.w, s1.h);
-        } else if (target === 'inline' && App.inlineBoard) {
-          var s2 = await imgSize(dataUrl);
-          App.inlineBoard.addImageNode(id, s2.w, s2.h);
-        }
+        added.push(id);
       } catch (err) { console.error(err); }
     }
     return added;
   }
 
   /* 相册 / 拍照 两个入口共用这套处理 */
-  async function onFilesPicked(files) {
-    if (!files || !files.length) return;
-    var target = App.imgTarget;
-    if (target === 'inline') target = 'note';
-
-    var added = await processImageFiles(files, target);
-    var ids = added.map(function (x) { return x.id; });
-
-    if (target === 'ai') {
+  async function onFilesPicked(files, request) {
+    if (!files.length || !request) return;
+    var ids = await processImageFiles(files);
+    if (!ids.length) { UI.toast('未能添加图片'); return; }
+    if (request.ai) {
       App.aiImgs = (App.aiImgs || []).concat(ids);
       renderAiAttach();
-      App.imgTarget = null;
-      if (ids.length) UI.toast('已添加 ' + ids.length + ' 张，发送时会一起给 AI');
-      return;
+      UI.toast('已添加 ' + ids.length + ' 张，发送时会一起给 AI');
+    } else if (request.canvas) {
+      await addImagesToCanvas(request.canvas, ids);
+      await Store.saveNow();
+      UI.toast('已添加 ' + ids.length + ' 张到画布');
+    } else if (request.noteId) {
+      await appendImagesToNote(request.noteId, ids);
+      await Store.saveNow();
+      UI.toast('已添加 ' + ids.length + ' 张');
     }
-    if (target === 'compose' && App.onComposeImages) {
-      App.onComposeImages(added);
-    } else if (App.noteId && (target === 'note' || !target)) {
-      await appendImagesToNote(App.noteId, ids);
-      if (ids.length && App.inlineBoard) fitInlineSoon();
-    } else if (App.pendingNoteId) {
-      await appendImagesToNote(App.pendingNoteId, ids);
-      App.pendingNoteId = null;
-    }
-    App.imgTarget = null;
-    App.insertAfterBlock = null;
-    if (ids.length) UI.toast('已添加 ' + added.length + ' 张');
   }
 
   function bindFileInputs() {
@@ -2498,9 +2601,10 @@
       if (!el) return;
       el.addEventListener('change', async function (e) {
         var files = Array.prototype.slice.call(e.target.files || []);
+        var request = App.imageRequest;
+        App.imageRequest = null;
         e.target.value = '';
-        if (!files.length) return;
-        await onFilesPicked(files);
+        await onFilesPicked(files, request);
       });
     });
   }
@@ -2525,18 +2629,16 @@
     });
     if (!files.length) { UI.toast('只支持图片文件'); return; }
 
-    if (!$('sheet-canvas').classList.contains('hidden')) {
-      var a1 = await processImageFiles(files, 'canvas');
-      UI.toast('已添加 ' + a1.length + ' 张到画布');
+    if (!$('sheet-canvas').classList.contains('hidden') && App.ctx) {
+      await onFilesPicked(files, { canvas: App.ctx });
     } else if (!$('sheet-note').classList.contains('hidden') && App.noteId) {
-      var a2 = await processImageFiles(files, 'note');
-      await appendImagesToNote(App.noteId, a2.map(function (x) { return x.id; }));
-      openNote(App.noteId);
-      if (a2.length) fitInlineSoon();
-      UI.toast('已添加 ' + a2.length + ' 张');
+      var request = e.target.closest && e.target.closest('#note-canvas-inline')
+        ? { canvas: { mode: 'note', noteId: App.noteId } } : { noteId: App.noteId };
+      await onFilesPicked(files, request);
     } else {
-      var a3 = await processImageFiles(files, null);
-      Store.createNote({ text: '', imageIds: a3.map(function (x) { return x.id; }) });
+      var a3 = await processImageFiles(files);
+      if (!a3.length) { UI.toast('未能添加图片'); return; }
+      Store.createNote({ text: '', imageIds: a3 });
       renderAll();
       UI.toast('已新建一条笔记，含 ' + a3.length + ' 张图');
     }
@@ -2619,28 +2721,21 @@
       openCtxMenu(r.right - 190, r.bottom + 6, noteMoreMenu(note));
     });
 
-    async function enterNoteCanvas() {
+    function enterNoteCanvas() {
       var note = Store.getNote(App.noteId);
       if (!note) return;
-      if (!note.canvas) {
-        UI.toast('正在生成画布…', 1200);
-        Store.updateNote(note.id, { canvas: await buildNoteCanvas(note) });
-        await Store.saveNow();
-      }
+      if (App.activeBlock && App.activeBlock.el.__finishEdit) App.activeBlock.el.__finishEdit();
       destroyInline();
       $('sheet-note').classList.add('hidden');
       openCanvas({ mode: 'note', noteId: note.id });
     }
 
     /** 创建画布后直接显示在笔记下方，不跳走 */
-    async function createCanvasInline() {
+    function createCanvasInline() {
       var note = Store.getNote(App.noteId);
       if (!note) return;
-      if (!note.canvas) {
-        UI.toast('正在生成画布…', 1500);
-        Store.updateNote(note.id, { canvas: await buildNoteCanvas(note) });
-        await Store.saveNow();
-      }
+      if (App.activeBlock && App.activeBlock.el.__finishEdit) App.activeBlock.el.__finishEdit();
+      ensureNoteCanvas(note);
       openNote(note.id);
       setTimeout(function () {
         var el = $('note-canvas-inline');
@@ -2662,8 +2757,7 @@
         var n = App.inlineBoard.addTextNode('');
         setTimeout(function () { App.inlineBoard.startEdit(n.id); }, 60);
       } else if (act === 'image') {
-        App.imgTarget = 'inline';
-        $('file-image').click();
+        pickImages('album', { canvas: { mode: 'note', noteId: App.noteId } });
       } else if (act === 'fit') {
         App.inlineBoard.fitView();
       }
@@ -2762,8 +2856,7 @@
         var n = App.board.addTextNode('');
         setTimeout(function () { App.board.startEdit(n.id); }, 60);
       } else if (act === 'add-image') {
-        App.imgTarget = 'canvas';
-        $('file-image').click();
+        pickImages('album', { canvas: App.ctx });
       } else if (act === 'add-note') {
         var notes = Store.queryNotes({});
         if (!notes.length) { UI.toast('先去写几条笔记'); return; }
@@ -2858,7 +2951,9 @@
     // 键盘：桌面 Esc 返回
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
-      if (!$('sheet-canvas').classList.contains('hidden')) {
+      if (App.viewer) {
+        goBack();
+      } else if (!$('sheet-canvas').classList.contains('hidden')) {
         if (App.board && App.board.linkingFrom) App.board.cancelLink();
         else $('canvas-back').click();
       } else if (!$('sheet-note').classList.contains('hidden')) {

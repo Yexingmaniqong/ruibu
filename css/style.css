@@ -798,12 +798,27 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit;}
 
 /* 图片查看器 */
 .img-viewer{
-  position:fixed;inset:0;z-index:300;
+  position:fixed;inset:0;z-index:300;overflow:hidden;
   background:rgba(9,12,18,.94);
-  display:flex;align-items:center;justify-content:center;
-  padding:16px;animation:fadeIn .15s;
+  animation:fadeIn .15s;
 }
-.img-viewer img{max-width:100%;max-height:100%;object-fit:contain;border-radius:6px;}
+.iv-stage{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  padding:60px 12px;touch-action:none;user-select:none;
+}
+.iv-stage.is-zoomed{cursor:grab;}
+.iv-stage.is-zoomed:active{cursor:grabbing;}
+.img-viewer img{
+  max-width:100%;max-height:100%;object-fit:contain;pointer-events:none;
+  -webkit-user-drag:none;
+}
+.iv-controls{
+  position:absolute;left:50%;bottom:calc(14px + var(--safe-b));transform:translateX(-50%);
+  display:flex;gap:2px;padding:3px;border-radius:22px;background:rgba(32,38,48,.92);color:#fff;
+}
+.iv-controls button{min-width:44px;height:38px;border-radius:18px;color:inherit;font-size:15px;}
+.iv-controls button:not(:disabled):hover{background:rgba(255,255,255,.13);}
+.iv-controls button:disabled{opacity:.38;}
 .img-viewer .iv-close{
   position:absolute;top:calc(14px + var(--safe-t));right:14px;
   width:38px;height:38px;border-radius:50%;

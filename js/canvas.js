@@ -178,8 +178,8 @@
     this._viewChanged();
   };
 
-  CanvasBoard.prototype.fitView = function (animate) {
-    var nodes = this.nodes;
+  CanvasBoard.prototype.fitView = function (animate, nodes) {
+    nodes = nodes || this.nodes;
     var r = this.host.getBoundingClientRect();
     if (!nodes.length) {
       this.view = { x: r.width / 2, y: r.height / 2, scale: 1 };
@@ -204,7 +204,6 @@
 
   /* ================= 渲染 ================= */
   CanvasBoard.prototype.render = function () {
-    if (this.editingId) return; // 编辑中不重建，避免丢失焦点
     var self = this;
     var alive = Object.create(null);
 
@@ -214,7 +213,7 @@
       if (!el) {
         el = self._mountNode(n);
         self._nodeEls[n.id] = el;
-      } else {
+      } else if (n.id !== self.editingId) {
         self._updateNodeEl(el, n);
       }
     });
@@ -650,6 +649,7 @@
     var host = this.host;
     var SIG = this._ac ? { signal: this._ac.signal } : undefined;
     var SIG_PASSIVE_FALSE = this._ac ? { signal: this._ac.signal, passive: false } : { passive: false };
+    var lastImageTap = null;
 
     function dist(p1, p2) {
       var dx = p1.x - p2.x, dy = p1.y - p2.y;
@@ -657,6 +657,18 @@
     }
     function mid(p1, p2) {
       return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    }
+    function imageTap(node, event) {
+      if (!node || node.type !== 'image') { lastImageTap = null; return; }
+      var now = performance.now();
+      if (lastImageTap && lastImageTap.id === node.id && now - lastImageTap.time <= 480
+          && Math.hypot(lastImageTap.x - event.clientX, lastImageTap.y - event.clientY) <= 28
+          && self.opts.onOpenImage) {
+        lastImageTap = null;
+        self.opts.onOpenImage(node.imageId);
+        return;
+      }
+      lastImageTap = { id: node.id, time: now, x: event.clientX, y: event.clientY };
     }
 
     host.addEventListener('pointerdown', function (e) {
@@ -673,6 +685,7 @@
       self._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
       if (self._pointers.size === 2) {
+        lastImageTap = null;
         var pts = Array.from(self._pointers.values());
         self._gesture = {
           type: 'pinch',
@@ -722,13 +735,11 @@
           return;
         }
 
-        var wasSelected = self.selectedId === id;
         self.select(id);
         var w = self.screenToWorld(e.clientX, e.clientY);
         self._gesture = {
           type: 'node',
           nodeId: id,
-          wasSelected: wasSelected,
           offsetX: w.x - node.x,
           offsetY: w.y - node.y,
           baseX: node.x,
@@ -840,7 +851,14 @@
       var wk = self._wake;
       if (wk && wk.id === e.pointerId) {
         self._wake = null;
-        if (Math.abs(e.clientX - wk.x) < 14 && Math.abs(e.clientY - wk.y) < 14) self.arm();
+        if (e.type === 'pointerup' && Math.hypot(e.clientX - wk.x, e.clientY - wk.y) < 14) {
+          self.arm();
+          var hit = document.elementFromPoint(e.clientX, e.clientY);
+          var wakeNode = hit && !hit.closest('.cv-handle, .cv-node-resize') && hit.closest('.cv-node');
+          var image = wakeNode && host.contains(wakeNode) && self.getNode(wakeNode.dataset.id);
+          if (image && image.type === 'image') self.select(image.id);
+          imageTap(image, e);
+        }
         return;
       }
       self._pointers.delete(e.pointerId);
@@ -862,6 +880,7 @@
       host.classList.remove('grabbing');
 
       if (!g) return;
+      if (g.type !== 'node' || g.moved || e.type === 'pointercancel') lastImageTap = null;
 
       if (g.type === 'pan') {
         if (!g.moved) {
@@ -891,14 +910,7 @@
           if (n3) { el3.style.left = n3.x + 'px'; el3.style.top = n3.y + 'px'; }
         }
         if (n3) self._renderEdgesFor(n3.id);
-        if (!g.moved) {
-          // 单击已经选中的图片 → 直接看大图（首次点击只是选中，方便拖拽/连线）
-          var n = n3;
-          if (n && n.type === 'image' && g.wasSelected && self.opts.onOpenImage) {
-            self.opts.onOpenImage(n.imageId);
-            return;
-          }
-        }
+        if (!g.moved && e.type === 'pointerup') { imageTap(n3, e); return; }
         self._changed();
       } else if (g.type === 'resize') {
         self._changed();
@@ -913,7 +925,9 @@
     // 双击节点：编辑文字 / 打开笔记
     host.addEventListener('dblclick', function (e) {
       if (self._destroyed) return;
-      var nodeEl = e.target.closest ? e.target.closest('.cv-node') : null;
+      var hit = document.elementFromPoint(e.clientX, e.clientY);
+      if (!hit || !host.contains(hit) || hit.closest('.cv-handle, .cv-node-resize')) return;
+      var nodeEl = hit.closest('.cv-node');
       if (!nodeEl) {
         var wp = self.screenToWorld(e.clientX, e.clientY);
         self.addTextNode('', 150, 46);
@@ -926,8 +940,6 @@
         if (self.opts.onOpenNote) self.opts.onOpenNote(n.noteId);
       } else if (n.type === 'text') {
         self.startEdit(id);
-      } else if (n.type === 'image') {
-        if (self.opts.onOpenImage) self.opts.onOpenImage(n.imageId);
       }
     }, SIG);
 
