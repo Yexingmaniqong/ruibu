@@ -22,7 +22,7 @@
   window.App = App;
 
   var $ = function (id) { return document.getElementById(id); };
-  var BUILD = '1.0.5';
+  var BUILD = '1.0.6';
   window.__BUILD = BUILD;
   function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
 
@@ -41,6 +41,7 @@
   /* ================= 导航 ================= */
   function switchTab(tab) {
     App.tab = tab;
+    if (tab !== 'ai') clearAISelection();
     ['notes', 'diary', 'todos', 'ai', 'boards', 'settings'].forEach(function (t) {
       $('view-' + t).classList.toggle('hidden', t !== tab);
     });
@@ -544,7 +545,18 @@
 
   /** 返回按钮 / 安卓返回键：关掉最上面一层 */
   function goBack() {
-    if (!layerStack.length) return false;
+    if (!$('modal-mask').classList.contains('hidden')) { UI.close(); return true; }
+    if (!$('ctx-mask').classList.contains('hidden')) { hideCtxMenu(); return true; }
+    if ($('sidebar').classList.contains('open')) { closeSidebar(); return true; }
+    if (!layerStack.length) {
+      if (App.tab === 'notes' && !App.tag && !App.keyword) return false;
+      App.tag = null;
+      App.keyword = '';
+      $('search-input').value = '';
+      switchTab('notes');
+      renderAll();
+      return true;
+    }
     try { history.back(); } catch (e) { popLayer(); }
     return true;
   }
@@ -1973,6 +1985,8 @@
   function renderAI() {
     var log = $('ai-log');
     if (!log) return;
+    clearAISelection();
+    renderAIProviders();
     clear(log);
     if (AI.history.length) {
       var bar = document.createElement('div');
@@ -1999,8 +2013,8 @@
       var h = document.createElement('div');
       h.className = 'ai-hello';
       h.innerHTML = AI.hasKey()
-        ? '直接问就行。<br>回答里可以<b>选中一段</b>点浮出来的「加到笔记」，也可以整条加到任意一条记录里。<br>公式照 <span class="k">\\dfrac{dy}{dx}</span> 这样写，它会自动排版。'
-        : '还没有配置 API Key：<br>去 <b>设置 → AI（DeepSeek）</b> 填一个 <span class="k">sk-…</span> 就能用了。<br>Key 只保存在这台设备上。';
+        ? '选中回答中的一段文字，再点输入框上方的「选段加到笔记」。'
+        : '请在「设置 → AI 模型」为当前服务填写 API Key。';
       log.appendChild(h);
     }
     AI.history.forEach(function (m) {
@@ -2021,7 +2035,7 @@
     body.className = 'ai-body';
     var name = document.createElement('div');
     name.className = 'ai-name';
-    name.textContent = m.role === 'user' ? '你' : 'DeepSeek';
+    name.textContent = m.role === 'user' ? '你' : AI.label(m.provider || 'deepseek', m.model);
     var text = document.createElement('div');
     text.className = 'ai-text';
     if (m.role === 'user') text.textContent = m.content;
@@ -2108,14 +2122,15 @@
       row.appendChild(wrap);
     });
   }
-  function appendTyping() {
+  function appendTyping(settings) {
     var log = $('ai-log');
     var wrap = document.createElement('div');
     wrap.className = 'ai-msg bot';
     wrap.innerHTML = '<div class="ai-avatar">AI</div>' +
-      '<div class="ai-body"><div class="ai-name">DeepSeek</div>' +
+      '<div class="ai-body"><div class="ai-name"></div>' +
       '<div class="ai-typing"><i></i><i></i><i></i><span style="margin-left:6px">正在想…</span></div></div>';
     log.appendChild(wrap);
+    wrap.querySelector('.ai-name').textContent = AI.label(settings.provider, settings.model);
     log.scrollTop = log.scrollHeight;
     return wrap;
   }
@@ -2123,6 +2138,7 @@
   function updateAISend() {
     var btn = $('ai-send');
     if (btn) btn.disabled = AI.busy;
+    $('ai-use-provider').disabled = AI.busy;
   }
 
   async function aiSend() {
@@ -2130,7 +2146,8 @@
     if (!ta || AI.busy) return;
     var q = ta.value.trim();
     if (!q) return;
-    if (!AI.hasKey()) {
+    var config = AI.config();
+    if (!config.key) {
       UI.toast('先去 设置 → AI 填 API Key');
       switchTab('settings');
       return;
@@ -2142,16 +2159,18 @@
     App.aiImgs = [];
     renderAiAttach();
 
-    AI.history.push({ role: 'user', content: q, images: imgs });
+    AI.history.push({ role: 'user', content: q, images: imgs, provider: config.provider, model: config.model });
     renderAI();
     AI.busy = true;
     updateAISend();
-    var typing = appendTyping();
+    var typing = appendTyping(config);
 
     var sys = '你是学习助手。回答尽量简洁、分段清楚；数学公式统一用 LaTeX（例如 \\dfrac{dy}{dx}）。' +
       '不要用 Markdown 表格。';
     var msgs = [{ role: 'system', content: sys }].concat(
-      AI.history.slice(-9).map(function (m) {
+      AI.history.filter(function (m) {
+        return (m.provider || 'deepseek') === config.provider && !m.content.startsWith('⚠️');
+      }).slice(-9).map(function (m) {
         if (m.role === 'user' && m.images && m.images.length) {
           return {
             role: 'user',
@@ -2164,14 +2183,14 @@
       })
     );
 
-    var r = await AI.chat(msgs);
+    var r = await AI.chat(msgs, config);
     AI.busy = false;
     if (typing && typing.parentNode) typing.parentNode.removeChild(typing);
 
     if (!r.ok) {
-      AI.history.push({ role: 'assistant', content: '⚠️ ' + r.error });
+      AI.history.push({ role: 'assistant', content: '⚠️ ' + r.error, provider: config.provider, model: config.model });
     } else {
-      AI.history.push({ role: 'assistant', content: r.text, q: q });
+      AI.history.push({ role: 'assistant', content: r.text, q: q, provider: config.provider, model: r.model || config.model });
     }
     renderAI();
     updateAISend();
@@ -2216,60 +2235,35 @@
     UI.toast('已加到「' + (RUIBU.prettyPlain(note.text || '', 12) || '笔记') + '」');
   }
 
-  /* 选中回答里的文字 → 浮出「加到笔记」 */
-  var selFloat = null, selTimer = null;
+  var aiSelection = '';
 
-  function hideSelFloat() {
-    if (selFloat && selFloat.parentNode) selFloat.parentNode.removeChild(selFloat);
-    selFloat = null;
+  function clearAISelection() {
+    aiSelection = '';
+    $('ai-add-selection').classList.add('hidden');
   }
 
   function onAINoteSelection() {
-    if (selTimer) clearTimeout(selTimer);
-    selTimer = setTimeout(function () {
-      var sel = window.getSelection();
-      if (!sel || sel.isCollapsed) { hideSelFloat(); return; }
-      var text = String(sel);
-      if (!text.trim()) { hideSelFloat(); return; }
-      var range = sel.getRangeAt(0);
-      var node = range.commonAncestorContainer;
-      var el = node.nodeType === 1 ? node : node.parentElement;
-      if (!el || !el.closest || !el.closest('#ai-log .ai-text')) { hideSelFloat(); return; }
+    var selection = window.getSelection();
+    var element = function (n) { return n && (n.nodeType === 1 ? n : n.parentElement); };
+    var first = selection && element(selection.anchorNode);
+    var last = selection && element(selection.focusNode);
+    var message = first && first.closest('#ai-log .bot .ai-text');
+    if (!message || !last || !message.contains(last) || selection.isCollapsed || !String(selection).trim()) {
+      clearAISelection();
+      return;
+    }
+    aiSelection = String(selection).trim();
+    $('ai-add-selection').classList.remove('hidden');
+  }
 
-      var rect = range.getBoundingClientRect();
-      hideSelFloat();
-      selFloat = document.createElement('div');
-      selFloat.className = 'sel-float';
-
-      var b1 = document.createElement('button');
-      b1.innerHTML = '<svg class="ico"><use href="#i-plus"/></svg><span>加到笔记</span>';
-      b1.addEventListener('mousedown', function (e) { e.preventDefault(); });
-      b1.addEventListener('click', function () {
-        var t = String(sel).trim();
-        hideSelFloat();
-        addTextToNote(t, null, null);
-      });
-
-      var b2 = document.createElement('button');
-      b2.innerHTML = '<svg class="ico"><use href="#i-note"/></svg><span>复制</span>';
-      b2.addEventListener('mousedown', function (e) { e.preventDefault(); });
-      b2.addEventListener('click', function () {
-        var t = String(sel).trim();
-        hideSelFloat();
-        copyText(t).then(function () { UI.toast('已复制'); });
-      });
-
-      selFloat.appendChild(b1);
-      selFloat.appendChild(b2);
-      document.body.appendChild(selFloat);
-
-      var w = selFloat.offsetWidth, h = selFloat.offsetHeight;
-      var left = Math.min(Math.max(8, rect.left + rect.width / 2 - w / 2), window.innerWidth - w - 8);
-      var top = rect.top - h - 8;
-      if (top < 8) top = rect.bottom + 8;
-      selFloat.style.left = left + 'px';
-      selFloat.style.top = top + 'px';
-    }, 160);
+  function renderAIProviders() {
+    var select = $('ai-use-provider');
+    clear(select);
+    Object.keys(AI.providers).forEach(function (id) {
+      var config = AI.config(id);
+      select.add(new Option(AI.label(id, config.model), id));
+    });
+    select.value = AI.active();
   }
 
   function bindAI() {
@@ -2297,40 +2291,50 @@
       });
     }
 
-    document.addEventListener('selectionchange', function () {
-      if (!$('view-ai') || $('view-ai').classList.contains('hidden')) return;
-      onAINoteSelection();
+    var addSelection = $('ai-add-selection');
+    addSelection.addEventListener('pointerdown', function (e) { e.preventDefault(); });
+    addSelection.addEventListener('click', function () {
+      var text = aiSelection;
+      clearAISelection();
+      window.getSelection().removeAllRanges();
+      if (text) addTextToNote(text);
     });
-    document.addEventListener('pointerdown', function (e) {
-      if (selFloat && !selFloat.contains(e.target)) hideSelFloat();
-    }, true);
-    window.addEventListener('scroll', hideSelFloat, true);
+    document.addEventListener('selectionchange', function () {
+      if (App.tab === 'ai') onAINoteSelection();
+    });
+    $('ai-use-provider').addEventListener('change', function () {
+      AI.select(this.value);
+      renderAI();
+    });
 
-    // 设置：读取 / 保存 / 测试
-    var keyEl = $('ai-key'), modelEl = $('ai-model');
-    function fillAISettings() {
-      AI.cfg();
-      if (keyEl) keyEl.value = AI.key || '';
-      if (modelEl) modelEl.value = AI.model || 'deepseek-chat';
+    var providerEl = $('ai-provider'), keyEl = $('ai-key'), modelEl = $('ai-model');
+    Object.keys(AI.providers).forEach(function (id) { providerEl.add(new Option(AI.label(id), id)); });
+    function loadProfile() {
+      var config = AI.config(providerEl.value);
+      keyEl.value = config.key;
+      modelEl.value = config.model;
     }
+    function fillAISettings() {
+      providerEl.value = AI.active();
+      loadProfile();
+    }
+    function saveProfile() {
+      AI.save(providerEl.value, keyEl.value, modelEl.value);
+      AI.select(providerEl.value);
+      loadProfile();
+    }
+    providerEl.addEventListener('change', loadProfile);
     $('btn-ai-save').addEventListener('click', function () {
-      AI.save({ key: (keyEl.value || '').trim(), model: modelEl.value });
-      fillAISettings();
+      saveProfile();
       UI.toast('已保存');
     });
     $('btn-ai-test').addEventListener('click', async function () {
-      AI.save({ key: (keyEl.value || '').trim(), model: modelEl.value });
-      fillAISettings();
+      saveProfile();
+      var settings = AI.config();
       UI.toast('正在测试…', 3000);
-      var r = await AI.chat([
-        { role: 'system', content: '回复"连接正常"四个字。' },
-        { role: 'user', content: '在吗' }
-      ], { temperature: 0 });
-      UI.toast(r.ok ? '连接正常：' + r.text.slice(0, 20) : '失败：' + r.error, 4000);
+      var r = await AI.chat([{ role: 'user', content: '请回复：连接正常。' }], settings);
+      UI.toast(r.ok ? '连接正常 · ' + r.model : '失败：' + r.error, 4000);
     });
-
-    // 切到设置页时把已存的 Key 填上
-    var origSwitch = window.__aiFillSettings;
     window.__aiFillSettings = fillAISettings;
   }
 
@@ -2338,6 +2342,31 @@
   function dayKey(ts) {
     var d = new Date(ts);
     return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+  }
+
+  function diaryDate(offset) {
+    var date = new Date();
+    date.setDate(date.getDate() - offset);
+    return date;
+  }
+
+  function shortDiaryDate(date) {
+    return (date.getMonth() + 1) + '月' + date.getDate() + '日';
+  }
+
+  function selectedDiaryDate() {
+    for (var i = 0; i <= 3; i++) {
+      var date = diaryDate(i);
+      if (!App.diaryDay || dayKey(date) === App.diaryDay) return date;
+    }
+    return null;
+  }
+
+  function updateDiaryWriteButton() {
+    var date = selectedDiaryDate();
+    var button = $('btn-new-diary');
+    button.disabled = !date;
+    button.textContent = date && dayKey(date) !== dayKey(Date.now()) ? '补写 ' + shortDiaryDate(date) : '写日记';
   }
 
   function renderDiary() {
@@ -2355,24 +2384,30 @@
     var have = Object.create(null);
     all.forEach(function (n) { have[dayKey(n.createdAt)] = (have[dayKey(n.createdAt)] || 0) + 1; });
     for (var i = 13; i >= 0; i--) {
-      var d = new Date();
-      d.setHours(0, 0, 0, 0);
-      d.setDate(d.getDate() - i);
+      var d = diaryDate(i);
       var key = dayKey(d.getTime());
       var b = document.createElement('button');
       b.className = 'diary-day' + (have[key] ? ' has' : '');
-      b.innerHTML = '<b>' + d.getDate() + '</b><span>' + (i === 0 ? '今天' : i === 1 ? '昨天' : '周' + wd[d.getDay()]) + '</span>';
+      b.classList.toggle('active', key === (App.diaryDay || dayKey(Date.now())));
+      b.innerHTML = '<b>' + shortDiaryDate(d) + '</b><span>周' + wd[d.getDay()] + '</span>';
       b.dataset.day = key;
       b.addEventListener('click', function () {
         Array.prototype.forEach.call(strip.querySelectorAll('.diary-day'), function (x) {
           x.classList.remove('active');
         });
         this.classList.add('active');
+        App.diaryDay = this.dataset.day;
+        updateDiaryWriteButton();
         var target = list.querySelector('[data-day="' + this.dataset.day + '"]');
         if (target) target.scrollIntoView({ block: 'start', behavior: 'smooth' });
-        else UI.toast('这天还没有日记');
       });
       strip.appendChild(b);
+    }
+    updateDiaryWriteButton();
+    var activeDay = strip.querySelector('.active');
+    if (activeDay) {
+      var overflow = activeDay.getBoundingClientRect().right - strip.getBoundingClientRect().right;
+      if (overflow > 0) strip.scrollLeft += overflow + 6;
     }
 
     if (!all.length) {
@@ -2398,7 +2433,7 @@
       var d = new Date(g.ts);
       var rail = document.createElement('div');
       rail.className = 'diary-rail';
-      rail.innerHTML = '<b>' + d.getDate() + '</b>' + (d.getMonth() + 1) + '月 周' + wd[d.getDay()];
+      rail.innerHTML = '<b>' + shortDiaryDate(d) + '</b><span>周' + wd[d.getDay()] + '</span>';
       var node = document.createElement('div');
       node.className = 'diary-node';
 
@@ -2443,7 +2478,8 @@
   }
 
   function openDiaryCompose() {
-    openCompose(null, 'diary');
+    var date = selectedDiaryDate();
+    if (date) openCompose(null, 'diary', date.getTime());
   }
 
   /* ================= 画布列表 ================= */
@@ -2518,9 +2554,9 @@
   }
 
   /* ================= 新建笔记（全屏编辑，不再是弹窗） ================= */
-  function openCompose(prefillTag, kind) {
+  function openCompose(prefillTag, kind, createdAt) {
     var text = prefillTag ? '#' + prefillTag + ' ' : '';
-    var note = Store.createNote({ text: text, kind: kind === 'diary' ? 'diary' : 'note' });
+    var note = Store.createNote({ text: text, kind: kind === 'diary' ? 'diary' : 'note', createdAt: createdAt });
     Store.saveNow();
     App.composeDraft = note.id;
     openNote(note.id);
@@ -2951,16 +2987,8 @@
     // 键盘：桌面 Esc 返回
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
-      if (App.viewer) {
-        goBack();
-      } else if (!$('sheet-canvas').classList.contains('hidden')) {
-        if (App.board && App.board.linkingFrom) App.board.cancelLink();
-        else $('canvas-back').click();
-      } else if (!$('sheet-note').classList.contains('hidden')) {
-        closeNote();
-      } else if (!$('modal-mask').classList.contains('hidden')) {
-        UI.close();
-      }
+      if (!App.viewer && App.board && App.board.linkingFrom) App.board.cancelLink();
+      else goBack();
     });
 
     // 桌面快捷键：Cmd/Ctrl+K 搜索
@@ -2978,7 +3006,7 @@
 
     window.addEventListener('popstate', function () {
       // 多级返回：图片 → 画布 → 笔记，一层一层退
-      popLayer();
+      if (!popLayer() && App.tab !== 'notes') goBack();
     });
   }
 

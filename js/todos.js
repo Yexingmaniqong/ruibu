@@ -31,11 +31,16 @@
     if (bridge) {
       var settings = JSON.parse(bridge.status());
       if (!settings.notifications) {
-        permissions.append(element('span', '开启通知后，待办到点可以弹出提醒并震动。'),
+        permissions.append(element('span', '开启通知后，待办到点会使用系统闹铃通道。'),
           button('开启通知', 'todo-link', function () { bridge.openSettings('notifications'); }));
       } else if (!settings.exact) {
         permissions.append(element('span', '系统可能延后提醒。开启「闹钟和提醒」可按设定时间提醒。'),
           button('允许准时提醒', 'todo-link', function () { bridge.openSettings('exact'); }));
+      } else if (settings.fullscreen === false) {
+        permissions.append(element('span', '允许全屏提醒后，可在锁屏时展示待办弹窗。'),
+          button('允许全屏提醒', 'todo-link', function () { bridge.openSettings('fullscreen'); }));
+      } else {
+        permissions.append(button('闹铃声音与通知设置', 'todo-link', function () { bridge.openSettings('notifications'); }));
       }
     } else {
       permissions.append(element('span', '保留 RUIBU 运行，才能收到此设备上的到点提醒。'));

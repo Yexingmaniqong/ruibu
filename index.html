@@ -151,6 +151,10 @@
       <div class="ai-wrap">
         <div class="ai-log" id="ai-log"></div>
         <div class="ai-attach hidden" id="ai-attach"></div>
+        <div class="ai-context">
+          <select id="ai-use-provider" aria-label="当前 AI 服务和模型"></select>
+          <button type="button" class="ai-act primary hidden" id="ai-add-selection">选段加到笔记</button>
+        </div>
         <div class="ai-input">
           <button class="ai-addimg" id="ai-addimg" title="给 AI 发图片"><svg class="ico"><use href="#i-image"/></svg></button>
           <textarea id="ai-text" rows="1" placeholder="问点什么…  Ctrl/⌘ + Enter 发送"></textarea>
@@ -198,17 +202,13 @@
     <section class="pane hidden" id="view-settings">
       <div class="pane-inner narrow">
         <div class="settings-group">
-          <div class="settings-title">AI（DeepSeek）</div>
+          <div class="settings-title">AI 模型</div>
           <p class="settings-note">
-            填你自己的 DeepSeek API Key（<code>sk-…</code>）。Key 只存在这台设备本地，
-            提问时经本机同步服务转发，不会存到别处。
-            没有 Key 可去 platform.deepseek.com 申请。
+            每家服务可单独保存 API Key 和模型 ID。发送时，内容通过本机服务转发给所选厂商。
           </p>
-          <input class="set-input" id="ai-key" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false">
-          <select class="set-input" id="ai-model">
-            <option value="deepseek-chat">deepseek-chat</option>
-            <option value="deepseek-reasoner">deepseek-reasoner</option>
-          </select>
+          <select class="set-input" id="ai-provider" aria-label="AI 服务商"></select>
+          <input class="set-input" id="ai-key" type="password" placeholder="API Key" aria-label="API Key" autocomplete="off" spellcheck="false">
+          <input class="set-input" id="ai-model" type="text" placeholder="模型 ID 或豆包接入点 ID" aria-label="模型 ID" autocomplete="off" spellcheck="false">
           <button class="row-btn" id="btn-ai-save">保存 AI 设置</button>
           <button class="row-btn" id="btn-ai-test">测试连接</button>
         </div>

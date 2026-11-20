@@ -1,162 +1,110 @@
-/* =========================================================
- * ai.js —— DeepSeek 问答
- *  · Key / 模型存在本地（IndexedDB 的 state.ai），不上传任何服务器
- *  · 优先走本机同步服务的 /api/ai 代理（避开浏览器 CORS），
- *    没有服务端时退回直连 api.deepseek.com
- * ========================================================= */
 (function (global) {
   'use strict';
 
-  var ENDPOINT = 'https://api.deepseek.com/chat/completions';
-
-  var AI = {
-    model: 'deepseek-chat',
-    key: '',
-    busy: false,
-    history: []            // [{role:'user'|'assistant', content}]
+  var providers = {
+    deepseek: { name: 'DeepSeek', model: 'deepseek-flash' },
+    openai: { name: 'OpenAI · GPT', model: 'gpt-5.4-mini' },
+    anthropic: { name: 'Anthropic · Claude', model: 'claude-sonnet-4-6' },
+    doubao: { name: '火山方舟 · 豆包', model: 'doubao-seed-2-1-pro-260915' },
+    xai: { name: 'xAI · Grok', model: 'grok-4.3' }
   };
-
-  var LS_KEY = 'ruibu.ai.key';
-  var LS_MODEL = 'ruibu.ai.model';
+  var AI = { providers: providers, busy: false, history: [] };
+  var LS_PROFILES = 'ruibu.ai.profiles';
+  var LS_PROVIDER = 'ruibu.ai.provider';
   var LS_HIST = 'ruibu.ai.history';
 
-  function readLS(k, d) {
-    try {
-      var v = localStorage.getItem(k);
-      return v === null ? d : v;
-    } catch (e) {
-      return d;
+  function read(k, fallback) {
+    try { return localStorage.getItem(k) || fallback; } catch (e) { return fallback; }
+  }
+  function write(k, value) {
+    try { localStorage.setItem(k, value); } catch (e) { }
+  }
+  function json(k, fallback) {
+    try { return JSON.parse(read(k, 'null')) || fallback; } catch (e) { return fallback; }
+  }
+
+  function active() {
+    var id = read(LS_PROVIDER, 'deepseek');
+    return Object.hasOwn(providers, id) ? id : 'deepseek';
+  }
+  function select(id) {
+    if (Object.hasOwn(providers, id)) write(LS_PROVIDER, id);
+  }
+  function config(id) {
+    id = id || active();
+    var profile = json(LS_PROFILES, {})[id];
+    if (!profile && id === 'deepseek') {
+      var model = read('ruibu.ai.model', '');
+      if (model === 'deepseek-chat' || model === 'deepseek-reasoner') model = 'deepseek-flash';
+      profile = { key: read('ruibu.ai.key', ''), model: model };
     }
+    return { provider: id, key: (profile && profile.key) || '', model: (profile && profile.model) || providers[id].model };
   }
-  function writeLS(k, v) {
-    try { localStorage.setItem(k, v); } catch (e) { }
-  }
-
-  /** 读配置。Key 只放 localStorage —— 不写进 Store，避免随同步数据上传到服务器 */
-  function cfg() {
-    AI.key = readLS(LS_KEY, '');
-    AI.model = readLS(LS_MODEL, 'deepseek-chat');
-    return AI;
+  function save(id, key, model) {
+    var profiles = json(LS_PROFILES, {});
+    profiles[id] = { key: key.trim(), model: model.trim() || providers[id].model };
+    write(LS_PROFILES, JSON.stringify(profiles));
   }
 
-  function save(patch) {
-    patch = patch || {};
-    if (patch.key !== undefined) writeLS(LS_KEY, patch.key || '');
-    if (patch.model !== undefined) writeLS(LS_MODEL, patch.model || 'deepseek-chat');
-    cfg();
-    return AI;
+  function claudePayload(model, messages) {
+    var system = messages.filter(function (m) { return m.role === 'system'; }).map(function (m) { return m.content; });
+    var content = messages.filter(function (m) { return m.role === 'user' || m.role === 'assistant'; }).map(function (m) {
+      var blocks = m.content;
+      if (Array.isArray(blocks)) {
+        blocks = blocks.map(function (part) {
+          if (part.type === 'text') return part;
+          var image = /^data:(image\/(?:jpeg|png|gif|webp));base64,([a-zA-Z0-9+/=]+)$/.exec(part.image_url && part.image_url.url || '');
+          if (!image) return null;
+          return { type: 'image', source: { type: 'base64', media_type: image[1], data: image[2] } };
+        }).filter(Boolean);
+      }
+      return { role: m.role, content: blocks };
+    });
+    return { model: model, system: system.join('\n'), messages: content, max_tokens: 4096 };
   }
 
-  function hasKey() { cfg(); return !!AI.key; }
-
-  /** 调一次模型，返回 {ok:true, text} 或 {ok:false, error} */
-  async function chat(messages, opts) {
-    cfg();
-    opts = opts || {};
-    if (!AI.key) return { ok: false, error: '还没有填 DeepSeek API Key（设置 → AI）' };
-
-    var payload = {
-      key: AI.key,
-      model: opts.model || AI.model,
-      messages: messages,
-      temperature: opts.temperature === undefined ? 0.6 : opts.temperature
-    };
-
-    // 1) 先试本机服务端代理
+  async function chat(messages, settings) {
+    settings = settings || config();
+    var provider = settings.provider;
+    var model = settings.model;
+    if (!settings.key) return { ok: false, error: '先在设置里填写 ' + providers[provider].name + ' 的 API Key' };
+    var payload = provider === 'anthropic' ? claudePayload(model, messages) : { model: model, messages: messages, stream: false };
+    // DeepSeek 的思考模式需要在多轮请求中回传推理字段。这里使用普通对话。
+    if (provider === 'deepseek') payload.thinking = { type: 'disabled' };
     try {
-      var r = await fetch('api/ai', {
+      var response = await fetch('api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ provider: provider, key: settings.key, payload: payload })
       });
-      if (r.status === 404) throw new Error('no-proxy');
-      var j = await r.json();
-      var out = parse(j);
-      if (out) return out;
-    } catch (e) {
-      if (e.message !== 'no-proxy' && e.name !== 'TypeError') {
-        // 代理有回应但内容不对，继续尝试直连
+      var result = await response.json();
+      if (!response.ok || result.error) {
+        var error = result.error && (result.error.message || result.error);
+        return { ok: false, error: response.status === 401 ? 'API Key 无效或已失效' : String(error || ('HTTP ' + response.status)) };
       }
-    }
-
-    // 2) 直连（浏览器/WebView 允许跨域时可用）
-    try {
-      var r2 = await fetch(ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + AI.key
-        },
-        body: JSON.stringify({
-          model: payload.model,
-          messages: messages,
-          temperature: payload.temperature,
-          stream: false
-        })
-      });
-      var j2 = await r2.json();
-      var out2 = parse(j2);
-      if (out2) return out2;
-      return { ok: false, error: '响应无法解析' };
-    } catch (e2) {
-      return { ok: false, error: '请求失败：' + (e2.message || e2) + '（可能是跨域被拦，试试用电脑上的同步服务打开）' };
+      var answer = provider === 'anthropic'
+        ? (result.content || []).filter(function (block) { return block.type === 'text'; }).map(function (block) { return block.text; }).join('\n')
+        : result.choices && result.choices[0] && result.choices[0].message.content;
+      if (typeof answer !== 'string' || !answer.trim()) return { ok: false, error: '模型没有返回文字' };
+      return { ok: true, text: answer.trim(), model: result.model || model, usage: result.usage };
+    } catch (err) {
+      return { ok: false, error: '无法从本机 AI 服务读取响应，请检查网络和服务状态' };
     }
   }
 
-  function parse(j) {
-    if (!j) return { ok: false, error: '空响应' };
-    if (j.error) {
-      var msg = j.error.message || j.error;
-      if (/401|invalid.*key|api key/i.test(String(msg))) msg = 'API Key 无效，检查一下设置里的 Key';
-      return { ok: false, error: String(msg) };
-    }
-    var c = j.choices && j.choices[0];
-    var text = c && c.message && c.message.content;
-    if (!text) return { ok: false, error: '模型没有返回内容' };
-    return { ok: true, text: String(text).trim(), usage: j.usage || null };
-  }
-
-  /** 把一条回答整理成可写进笔记的文字（保留公式与要点结构） */
-  function toNoteText(question, answer) {
-    var q = String(question || '').trim();
-    var a = String(answer || '').trim();
-    var out = '';
-    if (q) out += 'Q：' + q + '\n';
-    out += a;
-    return out;
-  }
-
-  /** 对话记录持久化：关掉后台/重开也还在 */
-  function loadHistory() {
-    try {
-      var raw = localStorage.getItem(LS_HIST);
-      if (!raw) return [];
-      var arr = JSON.parse(raw);
-      return Array.isArray(arr) ? arr : [];
-    } catch (e) { return []; }
-  }
-
-  function saveHistory() {
-    try {
-      var arr = AI.history.slice(-40);
-      localStorage.setItem(LS_HIST, JSON.stringify(arr));
-    } catch (e) { }
-  }
-
-  function clearHistory() {
-    AI.history = [];
-    try { localStorage.removeItem(LS_HIST); } catch (e) { }
-  }
-
-  AI.loadHistory = function () { AI.history = loadHistory(); return AI.history; };
-  AI.saveHistory = saveHistory;
-  AI.clearHistory = clearHistory;
-
-  AI.cfg = cfg;
+  AI.config = config;
+  AI.active = active;
+  AI.select = select;
   AI.save = save;
-  AI.hasKey = hasKey;
+  AI.hasKey = function () { return !!config().key; };
   AI.chat = chat;
-  AI.toNoteText = toNoteText;
-
+  AI.label = function (id, model) { return (providers[id] || providers.deepseek).name + (model ? ' · ' + model : ''); };
+  AI.toNoteText = function (question, answer) { return (question ? 'Q：' + question.trim() + '\n' : '') + answer.trim(); };
+  AI.loadHistory = function () {
+    var history = json(LS_HIST, []);
+    AI.history = Array.isArray(history) ? history : [];
+  };
+  AI.saveHistory = function () { write(LS_HIST, JSON.stringify(AI.history.slice(-40))); };
+  AI.clearHistory = function () { AI.history = []; write(LS_HIST, '[]'); };
   global.AI = AI;
 })(window);

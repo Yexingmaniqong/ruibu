@@ -1050,6 +1050,8 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit;}
   display:flex;flex-direction:column;align-items:center;gap:1px;
 }
 .diary-day b{font-size:15px;color:var(--text);font-weight:600;}
+.diary-day{min-width:64px;white-space:nowrap;}
+.diary-rail b{white-space:nowrap;}
 .diary-day.active{background:var(--green);color:#fff;}
 .diary-day.active b{color:#fff;}
 .diary-day.has::after{
@@ -1101,6 +1103,9 @@ input,textarea{font-family:inherit;font-size:inherit;color:inherit;}
    ========================================================= */
 #view-ai{display:flex;flex-direction:column;overflow:hidden;}
 .ai-wrap{flex:1;display:flex;flex-direction:column;min-height:0;width:100%;max-width:820px;margin:0 auto;}
+.ai-context{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 16px;min-height:42px;}
+.ai-context select{flex:1;min-width:0;max-width:100%;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);}
+.ai-context .ai-act{white-space:nowrap;flex-shrink:0;}
 .ai-log{flex:1;overflow-y:auto;padding:18px 24px 8px;-webkit-overflow-scrolling:touch;}
 
 .ai-hello{

@@ -199,10 +199,14 @@ function lanIPs() {
   return out;
 }
 
-/* ---------------- DeepSeek 代理 ----------------
- * 浏览器直连 api.deepseek.com 会被跨域拦掉，所以由本机服务转发。
- * Key 由客户端随请求带上，服务端不落盘、不记录。
- */
+const AI_ENDPOINTS = {
+  deepseek: 'https://api.deepseek.com/chat/completions',
+  openai: 'https://api.openai.com/v1/chat/completions',
+  anthropic: 'https://api.anthropic.com/v1/messages',
+  doubao: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
+  xai: 'https://api.x.ai/v1/chat/completions'
+};
+
 function handleAI(req, res) {
   if (req.method !== 'POST') {
     res.writeHead(405);
@@ -211,8 +215,13 @@ function handleAI(req, res) {
   let body = '';
   let tooBig = false;
   req.on('data', c => {
+    if (tooBig) return;
     body += c;
-    if (body.length > 4 * 1024 * 1024) { tooBig = true; req.destroy(); }
+    if (body.length > 12 * 1024 * 1024) {
+      tooBig = true;
+      body = '';
+      sendJSON(res, 413, { error: { message: '图片数据过大，请减少附件再试' } });
+    }
   });
   req.on('end', async () => {
     if (tooBig) return;
@@ -222,21 +231,24 @@ function handleAI(req, res) {
     } catch (e) {
       return sendJSON(res, 400, { error: { message: '请求格式不对' } });
     }
-    if (!obj.key) return sendJSON(res, 400, { error: { message: '缺少 API Key' } });
+    if (!obj || typeof obj.key !== 'string' || !obj.key) return sendJSON(res, 400, { error: { message: '缺少 API Key' } });
+    const provider = obj.provider || 'deepseek';
+    if (!Object.hasOwn(AI_ENDPOINTS, provider)) return sendJSON(res, 400, { error: { message: '未知 AI 服务' } });
+    const payload = obj.payload || { model: obj.model || 'deepseek-flash', messages: obj.messages || [], stream: false };
+    if (!payload || typeof payload.model !== 'string' || !Array.isArray(payload.messages)) {
+      return sendJSON(res, 400, { error: { message: '模型或消息格式不正确' } });
+    }
 
     try {
-      const r = await fetch('https://api.deepseek.com/chat/completions', {
+      const auth = provider === 'anthropic'
+        ? { 'x-api-key': obj.key, 'anthropic-version': '2023-06-01' }
+        : { Authorization: 'Bearer ' + obj.key };
+      const r = await fetch(AI_ENDPOINTS[provider], {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + obj.key
-        },
-        body: JSON.stringify({
-          model: obj.model || 'deepseek-chat',
-          messages: obj.messages || [],
-          temperature: obj.temperature === undefined ? 0.6 : obj.temperature,
-          stream: false
-        })
+        headers: { 'Content-Type': 'application/json', ...auth },
+        body: JSON.stringify(payload),
+        redirect: 'error',
+        signal: AbortSignal.timeout(120000)
       });
       const text = await r.text();
       res.writeHead(r.status, {
@@ -246,7 +258,7 @@ function handleAI(req, res) {
       });
       res.end(text);
     } catch (e) {
-      sendJSON(res, 502, { error: { message: '连不上 DeepSeek：' + e.message } });
+      sendJSON(res, 502, { error: { message: '无法连接所选 AI 服务' } });
     }
   });
 }
